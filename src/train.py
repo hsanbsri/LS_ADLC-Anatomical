@@ -1,13 +1,13 @@
-"""train.py — latih baseline 6-kelas TUEV (satu arm normalisasi, satu seed).
+"""train.py — train one model (one normalization arm, one seed) on the cached windows.
 
-Disiplin split (tidak bisa dilanggar dari config):
-  - eval TUEV resmi (80 sesi) HANYA dipakai sekali di akhir, untuk pelaporan.
-  - val diambil dari 290 pasien train secara SUBJECT-DISJOINT; seluruh seleksi
-    model (early stopping, pemilihan epoch terbaik) memakai val ini.
-  - tidak ada statistik apa pun yang mengalir dari val/eval ke train.
+Split discipline (cannot be overridden from the config):
+  - the official evaluation pool is used ONCE, at the end, for reporting only.
+  - the internal validation split is carved SUBJECT-DISJOINTLY from the training
+    pool; all model selection (early stopping, best epoch) uses it.
+  - no statistic of any kind flows from validation/evaluation into training.
 
-Baseline ini sengaja TANPA class weighting dan TANPA balancing: ia adalah
-angka pembanding yang harus dilampaui oleh GWO + LS-ADLC nanti.
+Plain cross-entropy, no class weighting and no re-balancing. LS-ADLC (paper,
+Algorithm 2) is enabled with --lsadlc adlc and the out-of-fold k-NN file of oof_encoder.py.
 """
 import argparse, json, os, sys, time
 import h5py, numpy as np, torch
@@ -43,9 +43,9 @@ def load_split(cfg, split, arm, tag=""):
     h = h5py.File(os.path.join(d, f"win_{split}{tag}.h5"), "r")
     npy = os.path.join(d, f"X_{split}{tag}.npy")
     if cfg["runtime"].get("mmap", False) and os.path.exists(npy):
-        X = np.load(npy, mmap_mode="r")              # dibagi lewat page cache OS
+        X = np.load(npy, mmap_mode="r")              # shared through the OS page cache
     else:
-        X = h["X"][:]                                # salinan penuh ke heap (~9,25 GB)
+        X = h["X"][:]                                # full copy into memory
     out = dict(X=X, y=h["y"][:].astype(np.int64), subj=h["subject"][:].astype(np.int64),
                chan=h["chan"][:].astype(np.int64),
                med=h["rec_med"][:], scale=h["rec_scale"][:],
@@ -53,8 +53,8 @@ def load_split(cfg, split, arm, tag=""):
     h.close()
     out["F"] = np.load(os.path.join(d, f"feat_{split}{tag}_{arm}.npy"))
     assert len(out["F"]) == len(out["X"])
-    # Berkas fitur selalu memuat kolom periodisitas. Bila varian ini mematikannya,
-    # potong ke kolom DWT saja supaya ablasinya benar-benar tanpa fitur triad.
+    # Feature files always contain the periodicity columns; when the periodicity
+    # features are disabled, keep only the DWT columns.
     nd = cfg["wavelet"]["n_subbands"] * len(cfg["wavelet"]["stats"])
     if not cfg.get("periodicity", {}).get("enabled", False):
         out["F"] = np.ascontiguousarray(out["F"][:, :, :nd])
@@ -66,7 +66,7 @@ def load_split(cfg, split, arm, tag=""):
 
 
 class GPUNorm:
-    """Normalisasi arm dilakukan di GPU per batch — hemat RAM, deterministik."""
+    """Arm normalization on the GPU, per batch: low RAM use, deterministic."""
     def __init__(self, cfg, arm, dev):
         self.mode = cfg["normalization"]["arms"][arm]["mode"]
         self.clip = float(cfg["normalization"]["clip_sigma"])
@@ -82,10 +82,10 @@ class GPUNorm:
 
 
 class ChannelDropout:
-    """Nol-kan n kanal acak per sampel, pada sinyal DAN baris fitur DWT-nya.
+    """Zero n random channels per sample, in the signal AND in its DWT feature rows.
 
-    Hanya aktif saat training. Kanal yang sedang ditanyakan (varian chanquery)
-    dilindungi bila protect_query=true, agar labelnya tetap terdefinisi.
+    Active during training only. The queried channel (channel-query variant, off
+    in the paper) is protected when protect_query=true so that its label stays defined.
     """
     def __init__(self, cfg):
         c = cfg["training"]["augment"]["channel_dropout"]
@@ -103,7 +103,7 @@ class ChannelDropout:
             return x, f
         score = torch.rand(B, C, device=x.device)
         if self.protect and ch is not None:
-            score.scatter_(1, ch[:, None], 2.0)       # skor tertinggi -> tak terpilih
+            score.scatter_(1, ch[:, None], 2.0)       # highest score -> never selected
         drop = torch.zeros(B, C, dtype=torch.bool, device=x.device)
         drop.scatter_(1, score.argsort(dim=1)[:, :self.n], True)
         drop &= hit[:, None]
@@ -112,10 +112,10 @@ class ChannelDropout:
 
 
 
-# ---- cache data di VRAM (opsional) -------------------------------------
-# Memindahkan array besar ke GPU SEKALI di awal, sehingga loop latih tidak lagi
-# menyalin host->device tiap batch. Nilai float32 yang dibaca IDENTIK; hanya
-# lokasi memorinya berbeda -> hasil bit-identik (diverifikasi).
+# ---- optional data cache in VRAM -------------------------------------
+# Moves the large arrays to the GPU ONCE at the start, so the training loop no
+# longer copies host->device every batch. The values read are IDENTICAL; only
+# their memory location differs -> bit-identical results (verified).
 _GPU_KEYS = ("X", "F", "med", "scale", "chan", "G")
 
 
@@ -126,21 +126,21 @@ def to_gpu_cache(D, dev, enable, reserve_gb=3.5):
                if D.get(k) is not None and hasattr(D[k], "nbytes"))
     free, _ = torch.cuda.mem_get_info()
     if need + reserve_gb * 1e9 > free:
-        print(f"  gpu_cache DILEWATI: butuh {need/1e9:.2f} GB + cadangan "
-              f"{reserve_gb:.1f} GB, VRAM bebas {free/1e9:.2f} GB")
+        print(f"  gpu_cache SKIPPED: needs {need/1e9:.2f} GB + reserve "
+              f"{reserve_gb:.1f} GB, free VRAM {free/1e9:.2f} GB")
         return D, False
     G = dict(D)
     for k in _GPU_KEYS:
         v = D.get(k)
         if v is not None and hasattr(v, "dtype"):
             G[k] = torch.as_tensor(np.ascontiguousarray(v)).to(dev)
-    print(f"  gpu_cache AKTIF: {need/1e9:.2f} GB data ditaruh di VRAM "
-          f"(bebas sebelumnya {free/1e9:.2f} GB)")
+    print(f"  gpu_cache ACTIVE: {need/1e9:.2f} GB of data placed in VRAM "
+          f"(free before: {free/1e9:.2f} GB)")
     return G, True
 
 
 def take(D, k, j, dev, jt):
-    """Ambil batch dari D[k]; jt != None berarti D[k] sudah tensor di GPU."""
+    """Fetch a batch from D[k]; jt != None means D[k] is already a GPU tensor."""
     v = D.get(k)
     if v is None:
         return None
@@ -153,7 +153,7 @@ def take(D, k, j, dev, jt):
 def predict(model, data, idx, norm, bs, dev, amp, n_cls=6):
     model.eval()
     out = np.empty(len(idx), dtype=np.int64)
-    prob = np.empty((len(idx), n_cls), dtype=np.float32)   # biner butuh 2, bukan 6
+    prob = np.empty((len(idx), n_cls), dtype=np.float32)   # binary tasks need 2 columns, not 6
     for s in range(0, len(idx), bs):
         j = idx[s:s + bs]
         jt = (torch.as_tensor(j, device=dev)
@@ -174,7 +174,7 @@ def predict(model, data, idx, norm, bs, dev, amp, n_cls=6):
 
 @torch.no_grad()
 def predict_gates(model, data, idx, norm, bs, dev, amp):
-    """Bobot gate per sampel (B, 3) untuk chain_expert. Hanya dipanggil bila saklarnya aktif."""
+    """Per-sample gate weights (B, 3) of the optional chain_expert model (not used in the paper)."""
     model.eval()
     G = np.empty((len(idx), 3), dtype=np.float32)
     for s in range(0, len(idx), bs):
@@ -199,18 +199,18 @@ def main():
     ap.add_argument("--variant", default="baseline", choices=["baseline", "chanquery"])
     ap.add_argument("--cache-tag", default="")
     ap.add_argument("--adlc-synth", default=None,
-                    help="npz baris sintetis ADLC ruang sinyal; ditambahkan HANYA ke train")
+                    help="npz of signal-space synthetic rows; added to the training split ONLY")
     ap.add_argument("--set", action="append", default=[], dest="overrides")
     ap.add_argument("--oof", default="oof_encoder.npz",
-                    help="berkas OOF sumber gerbang pair (relatif ke cache_dir)")
+                    help="OOF file of the alternative 'pair' gate (relative to cache_dir)")
     ap.add_argument("--allow-oof-mismatch", action="store_true",
-                    help="izinkan OOF yang tidak menutupi seluruh baris latih")
+                    help="allow an OOF file that does not cover every training row")
     ap.add_argument("--lsadlc", default=None, choices=["pair", "none", "adlc"],
-                    help="aktifkan LS-ADLC saat latihan penuh; gerbangnya")
+                    help="enable LS-ADLC during training; selects the gate (paper: adlc)")
     ap.add_argument("--binary", action="store_true",
-                    help="tahap 1: latih tugas BINER epileptiform (SPSW/GPED/PLED) vs bukan")
+                    help="stage 1 of an optional two-stage scheme: binary epileptiform vs. not (not used in the paper)")
     ap.add_argument("--init-from", default=None,
-                    help="tahap 2: muat bobot tahap-1; head 6-kelas diinisialisasi ulang")
+                    help="stage 2: load stage-1 weights; the classification head is re-initialized")
     ap.add_argument("--monitor", default=None,
                     choices=["balanced_accuracy", "macro_f1", "cohen_kappa"])
     ap.add_argument("--epochs", type=int, default=None)
@@ -242,28 +242,29 @@ def main():
         torch.backends.cudnn.benchmark = True
 
     t0 = time.time()
-    print(f"[{run}] memuat cache ...", flush=True)
+    print(f"[{run}] loading cache ...", flush=True)
     D = load_split(cfg, "train", a.arm, a.cache_tag)
     E = load_split(cfg, "eval", a.arm, a.cache_tag)
     print(f"  train {D['X'].shape}  eval {E['X'].shape}  {time.time()-t0:.0f}s", flush=True)
 
     # ---- split subject-disjoint train/val -----------------------------------
-    s_tr, s_va = subject_val_split(np.array(D["subjects"]), D["y"], D["subj"], cfg)
+    s_tr, s_va = subject_val_split(np.array(D["subjects"]), D["y"], D["subj"], cfg,
+                                    n_classes=cfg["model"]["n_classes"])
     in_val = np.isin(D["subj"], s_va)
     idx_tr = np.where(~in_val)[0]
     idx_va = np.where(in_val)[0]
     assert not (set(D["subj"][idx_tr]) & set(D["subj"][idx_va])), "SPLIT BOCOR"
-    print(f"  subjek train {len(s_tr)} / val {len(s_va)} (disjoint terverifikasi)")
-    n_cache_rows = len(D["y"])          # sebelum baris sintetik ditambahkan
+    print(f"  subjects train {len(s_tr)} / val {len(s_va)} (disjointness verified)")
+    n_cache_rows = len(D["y"])          # before any synthetic rows are added
     if a.adlc_synth:
         S = np.load(a.adlc_synth, allow_pickle=True)
         n0 = len(D["y"])
         for k in ("X", "F", "y", "chan", "med", "scale", "subj"):
             src = S["subject"] if k == "subj" else S[k]
             D[k] = np.concatenate([D[k], src.astype(D[k].dtype)])
-        assert D.get("G") is None, "ADLC sinyal belum mendukung fitur global"
+        assert D.get("G") is None, "signal-space ADLC does not support global features yet"
         idx_tr = np.concatenate([idx_tr, np.arange(n0, len(D["y"]))])
-        print(f"  ADLC sinyal: +{len(D['y'])-n0} baris sintetis (sigma={float(S['sigma'])}) "
+        print(f"  signal-space ADLC: +{len(D['y'])-n0} synthetic rows (sigma={float(S['sigma'])}) "
               f"-> train {len(idx_tr)}")
     print(f"  window  train {len(idx_tr)} / val {len(idx_va)}")
     print(f"  seleksi model: val {tr_cfg['early_stop']['monitor']} "
@@ -277,7 +278,7 @@ def main():
         E["y"] = (E["y"] < 3).astype(np.int64)
         cfg["model"]["n_classes"] = 2
         names = ["non-epi", "epi"]
-        print(f"  TAHAP 1 BINER: positif {int(D['y'][idx_tr].sum())} / {len(idx_tr)} baris latih",
+        print(f"  STAGE 1 BINARY: positives {int(D['y'][idx_tr].sum())} / {len(idx_tr)} training rows",
               flush=True)
 
     D, _gpu_cached = to_gpu_cache(D, dev, cfg["runtime"].get("gpu_cache", False))
@@ -285,17 +286,17 @@ def main():
     model = build_model(cfg, cfg["channels"]["n_channels"], feat_dim(cfg), gd).to(dev)
 
     if a.init_from:
-        # Tahap 2: warisi SELURUH encoder dari tahap biner; HANYA head yang baru.
+        # Stage 2: inherit the WHOLE encoder from the binary stage; ONLY the head is new.
         sd = torch.load(a.init_from, map_location="cpu")["model"]
         sd = {k: v for k, v in sd.items() if not k.startswith("head.")}
         miss = model.load_state_dict(sd, strict=False)
         assert all(k.startswith("head.") for k in miss.missing_keys), \
-            f"selain head ikut hilang: {[k for k in miss.missing_keys if not k.startswith('head.')][:5]}"
+            f"keys other than the head are missing: {[k for k in miss.missing_keys if not k.startswith('head.')][:5]}"
         assert not miss.unexpected_keys, miss.unexpected_keys
-        print(f"  TAHAP 2: encoder dimuat dari {os.path.basename(a.init_from)}; "
-              f"head 6-kelas diinisialisasi ulang ({len(miss.missing_keys)} tensor)", flush=True)
+        print(f"  STAGE 2: encoder loaded from {os.path.basename(a.init_from)}; "
+              f"classification head re-initialized ({len(miss.missing_keys)} tensors)", flush=True)
 
-    # ---- LS-ADLC saat pelatihan (encoder TIDAK beku) ------------------------
+    # ---- LS-ADLC during training (the encoder is NOT frozen) ------------------
     lat_cfg = cfg["lsadlc_train"]
     gate_full = lat_aug = None
     if lat_cfg["enabled"]:
@@ -308,47 +309,47 @@ def main():
                                  torch.from_numpy(oof["y"].astype(np.int64)).to(dev))
             gate_full = np.zeros(len(D["y"]), dtype=bool)
             gate_full[oof["idx_in_train_cache"]] = gp
-            assert (D["y"][oof["idx_in_train_cache"]] == oof["y"]).all(), "OOF tak selaras"
-            # Cakupan OOF HARUS menutupi seluruh baris latih. Bila OOF dihitung
-            # pada split LAIN, sebagian baris latih tak pernah punya skor dan
-            # gerbang jadi buta terhadapnya -- cacat senyap yang pernah terjadi
-            # (OOF iteratif dipakai ulang pada split alfabetis: hanya 84,9%
-            # baris latih ber-skor). Periksa eksplisit, jangan diam-diam lolos.
-            real = idx_tr[idx_tr < n_cache_rows]      # baris sintetik memang tak ber-OOF
+            assert (D["y"][oof["idx_in_train_cache"]] == oof["y"]).all(), "OOF file not aligned"
+            # The OOF file MUST cover every training row. If it was computed on a
+            # DIFFERENT split, some training rows would never have a score and the
+            # gate would be blind to them; this is checked explicitly instead of
+            # failing silently.
+            # (Training rows without a score are reported below.)
+            real = idx_tr[idx_tr < n_cache_rows]      # synthetic rows have no OOF score by design
             has = np.isin(real, oof["idx_in_train_cache"])
             if not has.all():
-                msg = (f"OOF {a.oof} hanya menutupi {100*has.mean():.1f}% baris latih "
-                       f"({int((~has).sum())} baris tanpa skor OOF). Split OOF tidak "
-                       f"cocok dengan split.mode={cfg['split']['mode']}/"
+                msg = (f"OOF {a.oof} covers only {100*has.mean():.1f}% of the training rows "
+                       f"({int((~has).sum())} rows without an OOF score). The OOF split does not "
+                       f"match split.mode={cfg['split']['mode']}/"
                        f"val_fraction={cfg['split']['val_fraction']}.")
                 if a.allow_oof_mismatch:
                     print(f"  PERINGATAN: {msg}")
                 else:
-                    raise AssertionError(msg + " Pakai --allow-oof-mismatch bila disengaja.")
+                    raise AssertionError(msg + " Use --allow-oof-mismatch if this is intended.")
         if lat_cfg["gate"] == "adlc":
             ac = lat_cfg["adlc"]
             kf = np.load(os.path.join(cfg["paths"]["cache_dir"], ac["knn_file"]))
             kj = list(kf["knn_grid"]).index(int(ac["k"]))
             conf = (kf["knn_w"] if ac["weighted"] else kf["knn_prop"])[:, kj]
             ky = kf["y"].astype(np.int64); kidx = kf["idx_in_train_cache"]
-            assert (D["y"][kidx] == ky).all(), "berkas k-NN tak selaras"
+            assert (D["y"][kidx] == ky).all(), "k-NN file not aligned"
             real = idx_tr[idx_tr < n_cache_rows]
             has = np.isin(real, kidx)
-            assert has.all(), (f"berkas k-NN {ac['knn_file']} hanya menutupi "
-                               f"{100*has.mean():.1f}% baris latih -- split tak cocok")
+            assert has.all(), (f"k-NN file {ac['knn_file']} covers only "
+                               f"{100*has.mean():.1f}% of the training rows -- split mismatch")
             lowv = np.full(len(ky), float(ac.get("threshold_low", 0.0)))
             nmin = int(ac.get("tau_low_min_borderline", 0))
-            if nmin > 0:   # kelas dgn sedikit borderline: buang HANYA outlier (c = 0)
+            if nmin > 0:   # classes with few borderline rows: drop ONLY outliers (c = 0); off in the paper
                 for cc in range(len(names)):
                     if cc in ac["exclude_classes"]: continue
                     nb = int(((conf >= lowv) & (conf < float(ac["threshold"])) & (ky == cc)).sum())
                     if nb < nmin:
                         lowv[ky == cc] = 1e-6
-                        print(f"  V-TAU: kelas {names[cc]} borderline {nb} < {nmin} -> batas bawah 1e-6")
+                        print(f"  V-TAU: class {names[cc]} borderline {nb} < {nmin} -> lower bound 1e-6")
             g_sel = ((conf < float(ac["threshold"])) & (conf >= lowv)
                      & ~np.isin(ky, ac["exclude_classes"]))
             if ac["control_random"]:
-                # KONTROL: jumlah per-kelas IDENTIK dgn gerbang, baris dipilih acak
+                # CONTROL (random gate): per-class counts IDENTICAL to the gate, rows drawn at random
                 rs = np.random.RandomState(seed + 999); g_rand = np.zeros_like(g_sel)
                 for cc in np.unique(ky[g_sel]):
                     pool = np.where(ky == cc)[0]
@@ -357,8 +358,8 @@ def main():
             gate_full = np.zeros(len(D["y"]), dtype=bool)
             gate_full[kidx] = g_sel
             per_c = {names[cc]: int((gate_full & (D["y"] == cc)).sum()) for cc in range(len(names))}
-            print(f"  ADLC gerbang ({'ACAK-kontrol' if ac['control_random'] else 'k-NN laten OOF'}"
-                  f", K={ac['k']}, ambang=[{ac.get('threshold_low', 0.0)},{ac['threshold']})): {per_c}")
+            print(f"  ADLC gate ({'RANDOM control' if ac['control_random'] else 'OOF latent k-NN'}"
+                  f", K={ac['k']}, threshold=[{ac.get('threshold_low', 0.0)},{ac['threshold']})): {per_c}")
         gen = torch.Generator(device=dev); gen.manual_seed(seed + 777)
         ops_cfg = lat_cfg["ops"]
 
@@ -368,16 +369,16 @@ def main():
                 return za if mask_t is None else torch.where(mask_t[:, None], za, z)
             return fn
         n_gate = int(gate_full.sum()) if gate_full is not None else len(idx_tr)
-        print(f"  LS-ADLC latihan: titik {lat_cfg['point']}, gerbang={lat_cfg['gate']}, "
-              f"{n_gate} baris ter-gate ({100*n_gate/len(idx_tr):.2f}% dari train)")
+        print(f"  LS-ADLC training: point {lat_cfg['point']}, gate={lat_cfg['gate']}, "
+              f"{n_gate} gated rows ({100*n_gate/len(idx_tr):.2f}% of train)")
     nper = len(cfg["periodicity"]["stats"]) if cfg["periodicity"]["enabled"] else 0
-    print(f"  fitur: {feat_dim(cfg)}/kanal ({feat_dim(cfg)-nper} DWT"
+    print(f"  features: {feat_dim(cfg)}/channel ({feat_dim(cfg)-nper} DWT"
           + (f" + {nper} periodisitas" if nper else "")
           + f") + {gd} global" + (" (lateralitas)" if gd else ""))
     norm = GPUNorm(cfg, a.arm, dev)
     aug = ChannelDropout(cfg)
     cd = cfg["training"]["augment"]["channel_dropout"]
-    print(f"  augmentasi channel_dropout: {'AKTIF' if cd['enabled'] else 'mati'}"
+    print(f"  channel_dropout augmentation: {'ON' if cd['enabled'] else 'off'}"
           + (f" (p={cd['p']}, n={cd['n_channels']}/{cfg['channels']['n_channels']})"
              if cd["enabled"] else ""))
     opt = torch.optim.AdamW(model.parameters(), lr=tr_cfg["lr"],
@@ -398,10 +399,10 @@ def main():
     adlc_on = lat_cfg["enabled"] and lat_cfg["gate"] == "adlc"
     if adlc_on:
         ac = lat_cfg["adlc"]; zdim = cfg["model"]["latent_dim"]; ncls = len(names)
-        cls_sd = None                                  # epoch 1: std global batch
+        cls_sd = None                                  # epoch 1: global batch SD
         mix_on = ac.get("synth_mode", "noise") in ("mixup", "mixup_pre"); QCAP = 1024
-        pre_on = ac.get("synth_mode", "noise") == "mixup_pre"   # V-MIXA: mixup di u (pra-to_latent)
-        queues = [None] * ncls                         # laten sekelas (detach) utk mixup
+        pre_on = ac.get("synth_mode", "noise") == "mixup_pre"   # optional: mixup in u (before to_latent)
+        queues = [None] * ncls                         # same-class latents (detached) for mixup
         ratio_log = []
 
     for ep in range(1, epochs + 1):
@@ -409,7 +410,7 @@ def main():
         perm = rng.permutation(idx_tr)
         tot, nb, te = 0.0, 0, time.time()
         if adlc_on:
-            # ADLC Algoritma 1 (calculate_dynamic_augmentation), riwayat = val monitor
+            # copy-ratio rule (Eq. 5; ADLC calculate_dynamic_augmentation), history = validation monitor
             mon_k = tr_cfg["early_stop"]["monitor"].replace("val_", "")
             fh = [h_[mon_k] for h_ in hist]
             mr = float(ac["max_ratio"])
@@ -417,7 +418,7 @@ def main():
                      max(float(ac["min_ratio"]), mr - 0.05) if fh[-1] >= fh[-2] else mr + 0.05)
             n_aug = int(int(ac["num_augmented"]) * ratio)
             if ep < int(ac.get("start_epoch", 1)):
-                n_aug = 0                              # encoder dibentuk dulu
+                n_aug = 0                              # let the encoder form first
             s1 = torch.zeros(ncls, zdim, device=dev, dtype=torch.float64)
             s2 = torch.zeros_like(s1); cnt = torch.zeros(ncls, device=dev, dtype=torch.float64)
             n_syn_ep = 0
@@ -428,7 +429,7 @@ def main():
             f = take(D, "F", j, dev, jt)
             m = take(D, "med", j, dev, jt)
             sc = take(D, "scale", j, dev, jt)
-            y = torch.from_numpy(D["y"][j]).to(dev)      # y tetap numpy (dipakai metrics)
+            y = torch.from_numpy(D["y"][j]).to(dev)      # D["y"] stays numpy (used by metrics)
             c = take(D, "chan", j, dev, jt)
             gg = take(D, "G", j, dev, jt)
             xa, fa = aug(norm(x, m, sc), f, ch=c)
@@ -443,19 +444,19 @@ def main():
                     else:
                         lo, z = model(xa, fa, ch=c, g=gg, return_latent=True)
                 zf = z.float(); zd = zf.detach().double()
-                vf = u.float() if pre_on else zf               # ruang tempat mixup dilakukan
-                oh = torch.nn.functional.one_hot(y, ncls).double()   # deterministik
+                vf = u.float() if pre_on else zf               # space in which mixup is done
+                oh = torch.nn.functional.one_hot(y, ncls).double()   # deterministic
                 s1 += oh.T @ zd; s2 += oh.T @ (zd * zd); cnt += oh.sum(0)
                 sel = torch.from_numpy(gate_full[j]).to(dev)
                 if n_aug > 0 and sel.any():
-                    zs = vf[sel].repeat_interleave(n_aug, 0)          # salinan BARU
+                    zs = vf[sel].repeat_interleave(n_aug, 0)          # NEW copies (not detached)
                     ys = y[sel].repeat_interleave(n_aug, 0)
                     sd = None if pre_on else (cls_sd[ys] if cls_sd is not None
                           else zd.std(0, keepdim=True).float().expand_as(zs))
                     if not mix_on:
                         noise = torch.randn(zs.shape, device=dev, generator=gen)
                         zs = zs + noise * (float(ac["alpha"]) * sd)
-                    else:   # V-MIX: z' = z + λ(q − z), q sekelas dari antrean
+                    else:   # optional mixup: z' = z + lam(q - z), q from the same-class queue
                         zs = zs.clone()
                         for cc in range(ncls):
                             rows = (ys == cc).nonzero(as_tuple=True)[0]
@@ -464,7 +465,7 @@ def main():
                                 qi = torch.randint(0, len(queues[cc]), (len(rows),), device=dev, generator=gen)
                                 lam_ = torch.rand(len(rows), 1, device=dev, generator=gen)
                                 zs[rows] = zs[rows] + lam_ * (queues[cc][qi] - zs[rows])
-                            elif not pre_on:   # V-MIXA: antrean kosong -> salinan tanpa ubahan
+                            elif not pre_on:   # empty queue -> Gaussian copy instead
                                 nz = torch.randn((len(rows), zs.shape[1]), device=dev, generator=gen)
                                 zs[rows] = zs[rows] + nz * (float(ac["alpha"]) * sd[rows])
                     with torch.autocast("cuda", dtype=amp):
@@ -481,14 +482,14 @@ def main():
                             q_ = zq[m_] if queues[cc] is None else torch.cat([queues[cc], zq[m_]])
                             queues[cc] = q_[-QCAP:]
                 gam_f = float(ac.get("focal_gamma", 0.0))
-                if gam_f > 0:   # V-FOC: focal loss
+                if gam_f > 0:   # optional focal loss (off in the paper)
                     w = torch.ones(len(yl), device=dev); w[len(y):] = lam
                     li = nn.functional.cross_entropy(lo.float(), yl, reduction="none")
                     li = (1 - torch.exp(-li)).pow(gam_f) * li
                     loss = (li * w).sum() / w.sum()
                 elif lam == 1.0:
                     loss = crit(lo.float(), yl)
-                else:                                  # salinan sintetis berbobot lam
+                else:                                  # synthetic rows weighted by lam
                     w = torch.ones(len(yl), device=dev); w[len(y):] = lam
                     li = nn.functional.cross_entropy(lo.float(), yl, reduction="none")
                     loss = (li * w).sum() / w.sum()
@@ -505,10 +506,10 @@ def main():
             mean_c = s1 / cnt.clamp(min=1)[:, None]
             var_c = (s2 / cnt.clamp(min=1)[:, None] - mean_c ** 2).clamp(min=0)
             glob = ((s2.sum(0) / cnt.sum()) - (s1.sum(0) / cnt.sum()) ** 2).clamp(min=0)
-            var_c[cnt < 2] = glob                                  # kelas tanpa data
+            var_c[cnt < 2] = glob                                  # classes without data
             cls_sd = var_c.sqrt().float()
             ratio_log.append({"epoch": ep, "ratio": ratio, "n_aug": n_aug, "n_synth": n_syn_ep})
-            print(f"  [ADLC] ep{ep} ratio={ratio:.2f} salinan/sampel={n_aug} sintetis={n_syn_ep}")
+            print(f"  [ADLC] ep{ep} ratio={ratio:.2f} copies/sample={n_aug} synthetic={n_syn_ep}")
         pv, _ = predict(model, D, idx_va, norm, bs * 2, dev, amp, len(names))
         mv = metrics(D["y"][idx_va], pv, names)
         hist.append({"epoch": ep, "train_loss": tot / nb, **{k: mv[k] for k in
@@ -523,10 +524,10 @@ def main():
               f"kappa={mv['cohen_kappa']*100:6.2f} macroF1={mv['macro_f1']*100:6.2f} "
               f"| {time.time()-te:.0f}s{star}", flush=True)
         if ep - best["epoch"] >= tr_cfg["early_stop"]["patience"]:
-            print(f"  early stop (tanpa perbaikan {tr_cfg['early_stop']['patience']} epoch)")
+            print(f"  early stop (no improvement for {tr_cfg['early_stop']['patience']} epochs)")
             break
 
-    # ---- eval resmi, SEKALI, dengan checkpoint terbaik-menurut-val ----------
+    # ---- official evaluation, ONCE, with the best checkpoint on validation ----
     model.load_state_dict(torch.load(ckpt)["model"])
     pe, prob = predict(model, E, np.arange(len(E["y"])), norm, bs * 2, dev, amp, len(names))
     me = metrics(E["y"], pe, names)
@@ -553,16 +554,16 @@ def main():
         json.dump(res, fh, indent=2)
     np.save(os.path.join(cfg["paths"]["results_dir"], f"{run}_evalprob.npy"), prob)
 
-    print(f"\n=== {run} — EVAL TUEV RESMI (epoch terbaik {best['epoch']}) ===")
+    print(f"\n=== {run} — EVALUATION (best epoch {best['epoch']}) ===")
     print(f"  balanced accuracy {me['balanced_accuracy']*100:6.2f}")
     print(f"  cohen kappa       {me['cohen_kappa']*100:6.2f}")
     print(f"  macro F1          {me['macro_f1']*100:6.2f}")
     print(f"  weighted F1       {me['weighted_f1']*100:6.2f}")
-    print(f"  {'kelas':6s}{'n':>7s}{'F1':>8s}{'sens':>8s}")
+    print(f"  {'class':6s}{'n':>7s}{'F1':>8s}{'sens':>8s}")
     for n in names:
         print(f"  {n:6s}{me['support'][n]:7d}{me['per_class_f1'][n]*100:8.2f}"
               f"{me['per_class_sensitivity'][n]*100:8.2f}")
-    print(f"  -> {rp}  ({res['minutes']:.1f} menit)")
+    print(f"  -> {rp}  ({res['minutes']:.1f} min)")
 
 
 if __name__ == "__main__":

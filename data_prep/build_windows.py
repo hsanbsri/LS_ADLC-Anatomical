@@ -1,18 +1,17 @@
-"""build_windows.py — EDF + .rec  ->  cache HDF5 window 5 s, 6 kelas.
+"""build_windows.py — TUEV EDF + .rec  ->  HDF5 cache of 5-s windows, 6 classes.
 
-Satu sampel = satu event beranotasi (kanal, t0, t1) pada file .rec, sesuai
-protokol TUEV yang dipakai BIOT/LaBraM/EEGMamba. Anotasi TUEV memang per-kanal,
-jadi segmen waktu yang sama boleh muncul lebih dari sekali dengan label berbeda.
+One sample = one annotated event (channel, t0, t1) of a .rec file. TUEV
+annotations are per channel, so the same time segment can appear more than
+once with different labels.
 
-Urutan pemrosesan per rekaman (PENTING, lihat DESIGN.md):
-  1. baca EDF -> montase bipolar TCP 22 kanal
-  2. notch 60/120 Hz, lalu bandpass 0,5-80 Hz, zero-phase, pada REKAMAN PENUH
-  3. hitung statistik robust per kanal (median, IQR) dari rekaman penuh terfilter
-  4. potong window 5 s dipusatkan pada tiap event
+Processing order per recording:
+  1. read the EDF -> 22-channel bipolar TCP montage
+  2. 60/120 Hz notch, then 0.5-80 Hz band-pass, zero-phase, on the WHOLE recording
+  3. robust per-channel statistics (median, IQR) of the whole filtered recording
+  4. cut a 5-s window centred on each event
 
-Cache menyimpan sinyal TERFILTER tapi BELUM dinormalisasi, plus statistik
-rekaman — sehingga arm A (z-score per-window) dan arm B (robust per-rekaman)
-dapat dijalankan dari cache yang sama tanpa ekstraksi ulang.
+The cache stores the FILTERED but NOT normalized signal plus the recording
+statistics, so both normalization arms can be run from the same cache.
 """
 import argparse
 import glob
@@ -32,7 +31,7 @@ from common import (load_config, sig_len, build_montage, build_filters,  # noqa:
 
 
 def read_rec(path, code_to_class):
-    """-> list (ch_idx, t0, t1, class_idx). Baris dengan kode tak dikenal dibuang."""
+    """-> list of (ch_idx, t0, t1, class_idx). Lines with an unknown code are dropped."""
     out = []
     with open(path) as f:
         for line in f:
@@ -97,11 +96,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--split", required=True, choices=["train", "eval"])
-    ap.add_argument("--limit", type=int, default=0, help="smoke test: n file pertama")
+    ap.add_argument("--limit", type=int, default=0, help="smoke test: first n files only")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--cache-tag", default="", help="sufiks nama cache, mis. lp40")
+    ap.add_argument("--cache-tag", default="", help="cache-name suffix, e.g. lp40")
     ap.add_argument("--set", action="append", default=[], dest="overrides",
-                    help="override config, mis. filtering.bandpass.high_hz=40")
+                    help="config override, e.g. filtering.bandpass.high_hz=40")
     args = ap.parse_args()
 
     cfg = load_config(args.config, overrides=args.overrides)
@@ -112,7 +111,7 @@ def main():
     recs = sorted(glob.glob(os.path.join(cfg["paths"]["edf_root"], args.split, "*", "*.rec")))
     if args.limit:
         recs = recs[:args.limit]
-    print(f"[{args.split}] {len(recs)} file .rec", flush=True)
+    print(f"[{args.split}] {len(recs)} .rec files", flush=True)
 
     from joblib import Parallel, delayed
     t0 = time.time()
@@ -122,10 +121,10 @@ def main():
     ok = [(r, res) for r, (res, err) in zip(recs, results) if res is not None]
     errs = [err for _, err in results if err is not None]
     total = sum(res[0].shape[0] for _, res in ok)
-    print(f"berhasil {len(ok)}/{len(recs)} file, {total} window, "
-          f"{time.time()-t0:.0f}s, gagal={len(errs)}", flush=True)
+    print(f"processed {len(ok)}/{len(recs)} files, {total} windows, "
+          f"{time.time()-t0:.0f}s, failed={len(errs)}", flush=True)
     for e in errs:
-        print("  GAGAL", e, flush=True)
+        print("  FAILED", e, flush=True)
 
     tag = f"_{args.cache_tag}" if args.cache_tag else ""
     out = args.out or os.path.join(cfg["paths"]["cache_dir"], f"win_{args.split}{tag}.h5")
@@ -167,9 +166,9 @@ def main():
     y = np.array([m[3] for _, (_, m, *_ ) in ok for m in [m] ]) if False else None
     with h5py.File(out, "r") as h:
         y = h["y"][:]
-        print(f"\ntersimpan -> {out}  ({os.path.getsize(out)/1e9:.2f} GB)")
-        print(f"window digeser di tepi: {n_shift} ({100*n_shift/total:.2f}%)")
-        print(f"subjek unik: {len(subjects)}")
+        print(f"\nsaved -> {out}  ({os.path.getsize(out)/1e9:.2f} GB)")
+        print(f"windows shifted at a recording edge: {n_shift} ({100*n_shift/total:.2f}%)")
+        print(f"unique subjects: {len(subjects)}")
         for c, nm in enumerate(cfg["labels"]["class_names"]):
             print(f"  {c} {nm:5s} {np.sum(y==c):7d}  ({100*np.mean(y==c):5.2f}%)")
 

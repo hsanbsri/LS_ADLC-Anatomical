@@ -1,0 +1,285 @@
+# =============================================================================
+# TUSZ, binary seizure detection — same settings as configs/config.yaml except the
+# lines marked [TUSZ]. Single configuration file. Scripts never hard-code values
+# found here; every run states the keys it changes with --set a.b.c=value (see
+# scripts/*.sh). Some defaults below differ from the settings used in the
+# paper (e.g. split.mode, val_fraction, early_stop.monitor, channel_dropout,
+# max_pool, periodicity, laterality); the run scripts override them explicitly.
+#
+# Design choices:
+#  - 5-s windows centred on each annotated event
+#  - 1 sample = 1 annotated event (channel, t0, t1); TUEV annotations are per channel
+#  - 60/120 Hz notch                 -> line noise dominates the raw signal
+#  - 80 Hz low-pass (not 40)         -> all 7 DWT subbands carry signal
+#  - filtering on the WHOLE recording -> no edge artefacts in the 5-s windows
+#  - explicit subject-disjoint split -> internal validation carved from the training pool
+# =============================================================================
+
+paths:
+  project_root: null            # null -> parent of configs/
+  dataset_root: "../dataset"
+  edf_subdir: "edf"
+  cache_dir: "data_tusz"         # [TUSZ]
+  logs_dir: "logs"
+  results_dir: "results"
+  ckpt_dir: "checkpoints"
+
+windowing:
+  fs: 250.0                     # all TUEV EDF files are natively 250 Hz -> no resampling
+  window_sec: 5.0               # -> 1250 samples
+  center_on_event: true         # ct = (t0+t1)/2, window = [ct-2.5, ct+2.5)
+  shift_at_edges: true          # shift (do not drop) windows that hit a recording edge
+  min_record_sec: 5.0           # shorter recordings are skipped
+
+channels:
+  montage_name: "ACNS_TCP_AR"
+  source: "dataset/AAREADME.txt (TUH EEG Event Corpus v2.0.0)"
+  n_channels: 22
+  montage:
+    - ["FP1","F7"]   # 0   temporal chain (left)
+    - ["F7","T3"]    # 1
+    - ["T3","T5"]    # 2
+    - ["T5","O1"]    # 3
+    - ["FP2","F8"]   # 4   temporal chain (right)
+    - ["F8","T4"]    # 5
+    - ["T4","T6"]    # 6
+    - ["T6","O2"]    # 7
+    - ["A1","T3"]    # 8   transverse central chain
+    - ["T3","C3"]    # 9
+    - ["C3","CZ"]    # 10
+    - ["CZ","C4"]    # 11
+    - ["C4","T4"]    # 12
+    - ["T4","A2"]    # 13
+    - ["FP1","F3"]   # 14  parasagittal chain (left)
+    - ["F3","C3"]    # 15
+    - ["C3","P3"]    # 16
+    - ["P3","O1"]    # 17
+    - ["FP2","F4"]   # 18  parasagittal chain (right)
+    - ["F4","C4"]    # 19
+    - ["C4","P4"]    # 20
+    - ["P4","O2"]    # 21
+  strip_prefix_regex: "^EEG\\s+"
+  strip_suffix_regex: "-(REF|LE)$"
+  aliases: {T7: "T3", T8: "T4", P7: "T5", P8: "T6"}
+
+labels:
+  # [TUSZ] 0 = background, 1 = seizure (labels written by data_prep/build_tusz.py)
+  code_to_class: {0: 0, 1: 1}
+  class_names: ["bckg", "seizure"]
+
+# --- Filtering: applied ONCE to the whole recording, before windowing ---------
+filtering:
+  notch:
+    enabled: true
+    freqs: [60.0, 120.0]        # line frequency and its harmonic
+    method: "iirnotch"
+    quality: 30.0               # Q; -3 dB bandwidth = f0/Q = 2 Hz at 60 Hz
+    zero_phase: true
+  bandpass:
+    enabled: true
+    filter: "butter"
+    order: 4
+    low_hz: 0.5
+    high_hz: 80.0
+    output: "sos"
+    method: "sosfiltfilt"
+
+# --- Robust per-recording statistics (used by normalization arm B only) ------
+# Computed on the WHOLE filtered recording, per montage channel, without any
+# label (no leakage).
+recording_stats:
+  center: "median"
+  scale: "iqr"                  # IQR/1.349 ~ sigma of a Gaussian
+  iqr_to_sigma: 1.349
+  eps: 1.0e-6
+
+# --- Normalization arms (the paper uses arm A) --------------------------------
+normalization:
+  arms:
+    A: {mode: "per_window_zscore", note: "per-window z-score; absolute amplitude removed"}
+    B: {mode: "per_recording_robust", note: "spike amplitude relative to the recording background is kept"}
+  clip_sigma: 20.0              # clip after normalization, damps extreme artefacts
+
+# --- DWT features (spectral branch) -------------------------------------------
+wavelet:
+  enabled: true
+  family: "db4"
+  level: 6                      # at 250 Hz -> A6 0-1.95 | D6 1.95-3.9 | D5 3.9-7.8
+                                #              D4 7.8-15.6 | D3 15.6-31.25
+                                #              D2 31.25-62.5 | D1 62.5-125
+  n_subbands: 7
+  stats: ["log_energy", "log_max_abs", "kurtosis"]   # -> 22 x 21
+  eps: 1.0e-8
+
+# --- Optional periodicity / laterality features (disabled in the paper) ------
+periodicity:
+  enabled: true
+  band_hz: [0.5, 3.0]           # typical discharge rate of periodic discharges
+  smooth_ms: 40                 # smoothing of the envelope |x|
+  stats: ["log_peak_power", "peak_freq", "periodicity_index"]
+
+laterality:
+  enabled: true
+  # TCP montage index -> hemisphere
+  left:  [0, 1, 2, 3, 8, 9, 10, 14, 15, 16, 17]
+  right: [4, 5, 6, 7, 11, 12, 13, 18, 19, 20, 21]
+  # symmetric left-right pairs
+  pairs: [[0,4],[1,5],[2,6],[3,7],[8,13],[9,12],[10,11],
+          [14,18],[15,19],[16,20],[17,21]]
+  eps: 1.0e-12
+
+# --- Subject-disjoint split ---------------------------------------------------
+split:
+  mode: "iterative"             # "iterative" | "alphabetical_tail" (the paper uses alphabetical_tail)
+  val_fraction: 0.15            # the paper uses 0.2
+  stratify_on: "rarest_class_presence"
+  seed: 42
+
+# --- Model --------------------------------------------------------------------
+model:
+  name: "CNN-Res-BiLSTM-Attention"
+  temporal:
+    residual: true          # ablation switch: false = plain convolutional blocks without shortcut
+    stem_channels: 64
+    res_blocks: [64, 128, 128, 256]   # each block downsamples by its stride
+    block_strides: [2, 2, 2, 2]   # default: 40 tokens x 128 ms
+    kernel_size: 7
+    dropout: 0.1
+  spectral:
+    hidden: 128
+    out_dim: 64
+    dropout: 0.1
+  global_feats:                 # optional laterality vector (see the laterality block)
+    enabled: true
+    hidden: 32
+  lstm:
+    enabled: true           # ablation switch: false = skip the BiLSTM
+    hidden: 128                 # bidirectional -> 256
+    layers: 1
+    dropout: 0.0
+  mamba:
+    # optional bidirectional Mamba replacing the BiLSTM; off
+    enabled: false
+    proj: 128
+    d_state: 16
+    d_conv: 4
+    expand: 2
+  # One model per anatomical group: list of channel indices, e.g. [0,1,2,3,4,5,6,7]
+  # (temporal), [8,9,10,11,12,13] (central), [14,...,21] (parasagittal).
+  # null = single full-montage model.
+  channel_subset: null
+  chain_expert:
+    # unrelated experimental architecture from a separate project; always off here
+    enabled: false
+    scale: 0.567
+  transformer:
+    # optional Transformer replacing the BiLSTM (mutually exclusive); off
+    enabled: false
+    layers: 1
+    heads: 4
+    ff_dim: 256
+    dropout: 0.1
+  attention:
+    enabled: true           # ablation switch: false = mean pooling over time
+    dim: 128
+  # optional channel query (embedding of the annotated channel); off in the paper
+  channel_query:
+    enabled: false              # switched on with --variant chanquery
+    emb_dim: 32
+    film: true                  # FiLM modulation of the temporal representation
+  max_pool:
+    enabled: false              # global max pooling over time next to attention pooling (on in the paper)
+  ann_channel_branch:
+    enabled: false              # optional branch on the annotated channel's signal; off
+    channels: [32, 64]
+    kernel_size: 7
+    stride: 2
+  latent_dim: 256               # z
+  head_dropout: 0.3
+  n_classes: 2                   # [TUSZ]
+
+# --- Training -----------------------------------------------------------------
+training:
+  epochs: 40
+  batch_size: 256
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  optimizer: "adamw"
+  scheduler: "cosine"
+  warmup_epochs: 2
+  grad_clip: 1.0
+  amp_dtype: "bf16"
+  loss: "ce"                    # plain cross-entropy, no class weighting
+  label_smoothing: 0.0
+  early_stop:
+    # The paper selects checkpoints on validation Cohen's kappa (--monitor cohen_kappa):
+    # balanced accuracy ignores precision and can favour unconverged models that
+    # spread predictions over rare classes. min_epochs guards against epoch-1 picks.
+    monitor: "val_balanced_accuracy"
+    mode: "max"
+    patience: 10
+    min_epochs: 3
+  num_workers: 8
+  seeds: [42]
+
+  augment:
+    channel_dropout:
+      enabled: false          # switched on with --set (on in the paper)
+      p: 0.3                  # probability of applying it to a sample
+      n_channels: 12          # number of channels zeroed when applied (of the 22-channel montage)
+      protect_query: true     # never drop the queried channel (channel-query variant only)
+
+# --- LS-ADLC during full training (the encoder is NOT frozen) ----------------
+lsadlc_train:
+  enabled: false                # switched on with --lsadlc
+  point: "B"                    # latent z (B, 256)
+  gate: "pair"                  # pair | none | adlc (the paper uses --lsadlc adlc)
+  ops:                          # generic latent operators (not used by the adlc gate)
+    gaussian_noise:      {p: 0.5, sigma_ratio: 0.02}
+    feature_scale:       {p: 0.5, range: [0.9, 1.1]}
+    feature_dim_dropout: {p: 0.1, ratio: 0.05}
+    structured_dropout:  {p: 0.3, max_ratio: 0.05}
+
+  # --- LS-ADLC as in the paper (--lsadlc adlc), Algorithms 1-2 -----------------
+  # ADLC (Sunaryono et al. 2025): k-NN confidence -> samples below a threshold ->
+  # int(num_augmented * ratio) Gaussian-perturbed copies ADDED to the training
+  # data, with a dynamic ratio. Adaptation: in the latent z, out-of-fold k-NN
+  # vote (distance-weighted share of same-label neighbours), minority classes
+  # only, noise = alpha * per-dimension latent SD of the class, encoder trained.
+  adlc:
+    knn_file: "oof_po_A_knn.npz"  # overridden per group, e.g. oof_pG_temporal.npz
+    k: 15                       # midpoint of the original ADLC search range (1-30)
+    weighted: true
+    threshold: 0.8              # original ADLC default (tau)
+    threshold_low: 0.0          # >0 = drop 'outliers' (exploratory variant; 0 in the paper)
+    syn_weight: 1.0             # loss weight of synthetic rows (1 = same as real rows)
+    start_epoch: 1              # synthesis is active from this epoch on
+    synth_mode: noise           # noise (paper) | mixup | mixup_pre (exploratory)
+    focal_gamma: 0.0            # >0 = focal loss (exploratory; 0 in the paper)
+    tau_low_min_borderline: 0   # exploratory; 0 in the paper
+    alpha: 0.5                  # noise scale relative to the class SD
+    num_augmented: 10           # original ADLC default (base number of copies)
+    max_ratio: 0.5              # original ADLC default
+    min_ratio: 0.1              # original ADLC default
+    exclude_classes: [0]        # [TUSZ] background = majority class here
+    control_random: false       # control: random rows with the gate's per-class counts
+
+evaluation:
+  metrics: ["balanced_accuracy", "cohen_kappa", "macro_f1", "weighted_f1",
+            "per_class_f1", "per_class_sensitivity", "confusion_matrix"]
+
+runtime:
+  # deterministic=true: cudnn.deterministic, benchmark off, deterministic cuBLAS.
+  # Required for the reported numbers (the run scripts set it to true).
+  deterministic: false
+  # mmap=true: X is read through np.memmap from the .npy file, so all processes
+  # share one copy in the OS page cache. Values read are identical.
+  mmap: true
+  # gpu_cache=true: X/F/med/scale/chan are moved to VRAM ONCE, so the training
+  # loop does not copy host->device every batch. Values are identical, results
+  # bit-identical; only wall time changes. Skipped automatically when the data
+  # do not fit.
+  gpu_cache: false
+  n_jobs: 12
+  seed: 42
+  h5_compression: null          # no compression -> fast reads during training

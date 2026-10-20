@@ -1,36 +1,19 @@
 #!/bin/bash
-# Step 2b of 3: treatment arm (pLS) — identical to run_pG.sh, plus the
-# per-group LS-ADLC confidence-gated latent-space augmentation. Requires
-# run_oof_knn.sh to have been run first (reads data/oof_pG_<group>.npz).
-# Usage: bash scripts/run_pLS.sh <seed_start> <seed_end>
+# Treatment arm pLS: the same three per-group backbones trained with LS-ADLC (Algorithm 2).
+# Requires the gate files of run_oof_knn.sh.
+# Usage: bash scripts/run_pLS.sh <tuev|tusz> <first_seed> <last_seed>    (paper: 42 66 and 100 124)
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
-mkdir -p logs results checkpoints
-PY=${PYTHON:-python3}
-export CUBLAS_WORKSPACE_CONFIG=:4096:8
-
-S1=${1:-42}; S2=${2:-42}
-P="--arm A --monitor cohen_kappa --set runtime.deterministic=true --set periodicity.enabled=false \
---set laterality.enabled=false --set runtime.gpu_cache=true --set split.mode=alphabetical_tail \
---set split.val_fraction=0.2"
-E="$P --set training.augment.channel_dropout.enabled=true --set training.augment.channel_dropout.p=0.3 \
---set training.augment.channel_dropout.n_channels=12 --set training.augment.channel_dropout.protect_query=false \
---set model.max_pool.enabled=true --set model.ann_channel_branch.enabled=false \
---set model.channel_query.enabled=false"
-
-run() {
-  name=$1; ids=$2; s=$3
-  [ -f "results/pLS_${name}_armA_seed${s}.json" ] && { echo "skip $name seed $s"; return; }
-  $PY src/train.py $E --variant baseline --seed "$s" --tag "pLS_${name}" --lsadlc adlc \
-    --set model.channel_subset="$ids" --set lsadlc_train.adlc.knn_file="oof_pG_${name}.npz" \
-    > "logs/pLS_${name}_seed${s}.log" 2>&1 || { echo "FAILED: $name seed $s"; exit 1; }
-  echo "$(date +%H:%M) done: pLS_${name} seed $s"
-}
-
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source scripts/flags.sh "${1:-tuev}"
+S1=${2:-42}; S2=${3:-42}
 for s in $(seq "$S1" "$S2"); do
-  run temporal "[0,1,2,3,4,5,6,7]" "$s"
-  run central "[8,9,10,11,12,13]" "$s"
-  run parasagittal "[14,15,16,17,18,19,20,21]" "$s"
+  for i in 0 1 2; do
+    name=${GROUP_NAMES[$i]}; ids=${GROUP_IDS[$i]}; tag=pLS_${name}
+    [ -f "$DATA/oof_pG_${name}.npz" ] || { echo "missing $DATA/oof_pG_${name}.npz: run scripts/run_oof_knn.sh $CORPUS first"; exit 1; }
+    [ -f "$RES/${tag}_armA_seed${s}.json" ] && continue
+    $PY src/train.py $GROUP_FLAGS --variant baseline --seed "$s" --tag "$tag" --lsadlc adlc \
+      --set model.channel_subset="$ids" --set lsadlc_train.adlc.knn_file="oof_pG_${name}.npz" \
+      > "logs/${CORPUS}_${tag}_seed${s}.log" 2>&1 || { echo "FAILED: $tag seed $s"; exit 1; }
+    echo "$(date +%H:%M) done: $tag seed $s ($CORPUS)"
+  done
 done
-echo PLS_DONE

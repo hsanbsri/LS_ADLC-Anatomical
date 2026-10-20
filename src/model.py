@@ -1,13 +1,15 @@
-"""model.py — CNN-Res-BiLSTM-Attention dua cabang.
+"""model.py — two-branch CNN-Res-BiLSTM-Attention backbone.
 
-Cabang T (temporal) : sinyal ternormalisasi (B, 22, 1250)
-                      -> stem Conv1d -> 4 blok residual -> (B, 256, 40)
-                      -> BiLSTM -> attention pooling -> 256-d
-Cabang S (spektral) : fitur subband DWT (B, 22, 21) -> MLP -> 64-d
-Gabung -> proyeksi ke laten Z (256) -> head linear -> 6 kelas.
+Temporal branch : normalized signal (B, C, 1250)
+                  -> Conv1d stem -> 4 residual blocks -> (B, 256, 40)
+                  -> BiLSTM -> attention pooling (+ global max pooling) -> sequence vector
+Spectral branch : DWT subband features (B, C, 21) -> MLP -> 64-d
+Concatenation -> projection to the latent z (256-d) -> linear head -> class logits.
 
-Cabang S menjaga informasi amplitudo lewat log_energy/log_max_abs; pada arm A
-cabang itulah satu-satunya jalur yang mempertahankan skala di dalam window.
+The spectral branch keeps amplitude information through log_energy/log_max_abs;
+with per-window z-scoring (arm A) it is the only path that preserves the
+within-window scale. Optional modules (Transformer, Mamba, channel query,
+annotated-channel branch, global features) are switched off in the paper.
 """
 import torch
 import torch.nn as nn
@@ -24,7 +26,7 @@ class ResBlock(nn.Module):
         self.c2 = nn.Conv1d(cout, cout, k, padding=pad, bias=False)
         self.b2 = nn.BatchNorm1d(cout)
         self.drop = nn.Dropout(p_drop)
-        # tanpa residual: jalur pintas tidak dibuat sama sekali (param tidak ikut terhitung)
+        # without the residual path, the shortcut is not created at all (no parameters counted)
         self.short = None if not self.residual else (
             nn.Identity() if (cin == cout and stride == 1) else
             nn.Sequential(nn.Conv1d(cin, cout, 1, stride=stride, bias=False),
@@ -39,7 +41,7 @@ class ResBlock(nn.Module):
 
 
 class AttentionPool(nn.Module):
-    """Additive attention (Bahdanau) atas sumbu waktu."""
+    """Additive (Bahdanau) attention over the time axis."""
     def __init__(self, d_in, d_att):
         super().__init__()
         self.W = nn.Linear(d_in, d_att)
@@ -52,11 +54,11 @@ class AttentionPool(nn.Module):
 
 
 class TransformerSeq(nn.Module):
-    """Encoder Transformer atas sumbu waktu, pengganti BiLSTM.
+    """Optional Transformer encoder over the time axis (alternative to the BiLSTM).
 
-    Sekuensnya hanya 40 token (dim 256), jadi self-attention 40x40 sangat murah.
-    Dimensi keluaran = dimensi masukan, sehingga bagian hilir (attention pool,
-    to_latent) tidak berubah dan perbandingannya adil.
+    The sequence has only 40 tokens (dim 256), so 40x40 self-attention is cheap.
+    The output width equals the input width, so the downstream modules
+    (attention pooling, to_latent) are unchanged.
     """
     def __init__(self, d_model, n_layers, n_head, d_ff, p_drop, max_len=64):
         super().__init__()
@@ -73,7 +75,7 @@ class TransformerSeq(nn.Module):
 
 
 class BiMamba(nn.Module):
-    """Bi-Mamba (pilot resolusi): proyeksi -> Mamba maju + Mamba mundur -> concat (lebar 2*proj, seperti BiLSTM)."""
+    """Optional bidirectional Mamba: projection -> forward + backward Mamba -> concat (width 2*proj, like the BiLSTM)."""
     def __init__(self, d_in, proj, d_state, d_conv, expand):
         super().__init__()
         from mamba_ssm import Mamba
@@ -98,16 +100,16 @@ class CNNResBiLSTMAttention(nn.Module):
             nn.BatchNorm1d(t["stem_channels"]), nn.GELU())
         self.use_res = bool(t.get("residual", True))
         blocks, cin = [], t["stem_channels"]
-        # pilot resolusi: stride per blok (default 2 semua = perilaku lama, 32x -> 128 ms/token)
+        # stride per block (default: 2 for every block, i.e. 32x downsampling -> 128 ms per token)
         strides = t.get("block_strides", [2] * len(t["res_blocks"]))
         assert len(strides) == len(t["res_blocks"])
         for cout, st in zip(t["res_blocks"], strides):
             blocks.append(ResBlock(cin, cout, k, int(st), t["dropout"], residual=self.use_res))
             cin = cout
         self.blocks = nn.Sequential(*blocks)
-        c_temporal = cin                      # lebar keluaran CNN (cin dipakai ulang di bawah)
+        c_temporal = cin                      # CNN output width (cin is reused below)
 
-        # saklar ablasi — default True, jadi perilaku lama tidak berubah
+        # ablation switches; the defaults (True) give the backbone used in the paper
         self.use_lstm = bool(ls.get("enabled", True))
         self.use_attn = bool(at.get("enabled", True))
         tf = m.get("transformer", {"enabled": False})
@@ -115,7 +117,7 @@ class CNNResBiLSTMAttention(nn.Module):
         mb = m.get("mamba", {"enabled": False})
         self.use_mamba = bool(mb.get("enabled", False))
         assert int(self.use_lstm) + int(self.use_trf) + int(self.use_mamba) <= 1, \
-            "pilih SALAH SATU modul temporal: lstm, transformer, ATAU mamba"
+            "choose ONE temporal module: lstm, transformer, OR mamba"
         if self.use_trf:
             self.trf = TransformerSeq(c_temporal, int(tf.get("layers", 1)),
                                       int(tf.get("heads", 4)),
@@ -134,7 +136,7 @@ class CNNResBiLSTMAttention(nn.Module):
             d_seq = 2 * int(mb.get("proj", 128))
         else:
             self.lstm = None
-            d_seq = c_temporal              # Transformer mempertahankan dimensi
+            d_seq = c_temporal              # the Transformer keeps the width
         self.pool = AttentionPool(d_seq, at["dim"]) if self.use_attn else None
 
         cq = m.get("channel_query", {"enabled": False})
@@ -142,13 +144,13 @@ class CNNResBiLSTMAttention(nn.Module):
         self.film = bool(cq.get("film", False)) and self.cq
         e = int(cq["emb_dim"]) if self.cq else 0
         if self.cq:
-            # emb(k) = "kanal mana yang sedang ditanyakan"
+            # emb(k) = "which channel is being queried" (optional, off in the paper)
             self.ch_emb = nn.Embedding(n_ch, e)
             if self.film:
                 self.film_fc = nn.Linear(e, 2 * d_seq)
-        # cabang spektral: fitur SEMUA kanal + fitur kanal yang DITANYA + emb
+        # spectral branch: features of ALL channels (+ queried channel and embedding if enabled)
         d_spec_in = n_ch * feat_dim + (feat_dim + e if self.cq else 0)
-        # cabang global: lateralitas (properti seluruh window, bukan per kanal)
+        # optional global branch: laterality (a property of the whole window)
         gcfg = m.get("global_feats", {"enabled": False})
         self.gdim = glob_dim if (gcfg.get("enabled") and glob_dim) else 0
         d_glob = 0
@@ -160,10 +162,10 @@ class CNNResBiLSTMAttention(nn.Module):
             nn.Dropout(sp["dropout"]),
             nn.Linear(sp["hidden"], sp["out_dim"]), nn.GELU())
 
-        # (A) pooling maksimum atas waktu, di samping attention-mean
+        # global max pooling over time, next to attention pooling (enabled in the paper)
         self.max_pool = bool(m.get("max_pool", {}).get("enabled", False))
         d_mp = d_seq if self.max_pool else 0
-        # (C) cabang kanal-teranotasi: 1 kanal, downsampling jauh lebih kecil
+        # optional annotated-channel branch (off in the paper)
         ac = m.get("ann_channel_branch", {"enabled": False})
         self.ann = bool(ac.get("enabled", False))
         d_ann = 0
@@ -174,7 +176,7 @@ class CNNResBiLSTMAttention(nn.Module):
                                   bias=False), nn.BatchNorm1d(cout), nn.GELU()]
                 cin = cout
             self.annnet = nn.Sequential(*lay)
-            d_ann = 2 * cin                      # max + mean atas waktu
+            d_ann = 2 * cin                      # max + mean over time
         self.to_latent = nn.Sequential(
             nn.Linear(d_seq + d_mp + sp["out_dim"] + d_glob + d_ann,
                       m["latent_dim"]), nn.GELU())
@@ -193,43 +195,44 @@ class CNNResBiLSTMAttention(nn.Module):
         if self.use_attn:
             h, att = self.pool(hseq)
         else:
-            h, att = hseq.mean(dim=1), None    # mean pooling atas waktu
+            h, att = hseq.mean(dim=1), None    # mean pooling over time
         s_in = f.flatten(1)
         if self.cq:
-            assert ch is not None, "varian channel_query butuh indeks kanal"
+            assert ch is not None, "the channel_query variant needs the channel index"
             e = self.ch_emb(ch)
-            q = f[torch.arange(f.shape[0], device=f.device), ch]   # fitur kanal ditanya
+            q = f[torch.arange(f.shape[0], device=f.device), ch]   # features of the queried channel
             s_in = torch.cat([s_in, q, e], dim=-1)
             if self.film:
-                gam, bet = self.film_fc(e).chunk(2, dim=-1)   # jangan pakai nama g:
-                h = h * (1 + gam) + bet                        # g = fitur global
+                gam, bet = self.film_fc(e).chunk(2, dim=-1)   # not named g:
+                h = h * (1 + gam) + bet                        # g = global features
         parts = [h]
         if self.max_pool:
             parts.append(hseq.max(dim=1).values)
         if self.ann:
-            assert ch is not None, "cabang kanal-teranotasi butuh indeks kanal"
+            assert ch is not None, "the annotated-channel branch needs the channel index"
             xa = x[torch.arange(x.shape[0], device=x.device), ch].unsqueeze(1)
             aa = self.annnet(xa)
             parts.append(torch.cat([aa.max(-1).values, aa.mean(-1)], dim=-1))
         parts.append(self.spec(s_in))
         if self.gdim:
-            assert g is not None, "model butuh vektor fitur global (lateralitas)"
+            assert g is not None, "the model needs the global feature vector (laterality)"
             parts.append(self.gnet(g))
-        u = torch.cat(parts, dim=-1)           # representasi gabungan pasca-attention
+        u = torch.cat(parts, dim=-1)           # joint post-attention representation
         z = self.to_latent(u)
-        if lat_aug is not None:          # LS-ADLC di titik B, encoder IKUT DILATIH
+        if lat_aug is not None:          # latent augmentation hook (encoder is trained jointly)
             z = lat_aug(z)
         logits = self.head(z)
-        if return_pre:                         # V-MIXA: mixup di u, bukan z
+        if return_pre:                         # also return the pre-latent representation u
             return logits, z, u
         return (logits, z) if return_latent else logits
 
 
 class ChannelSubset(nn.Module):
-    """Satu model per kelompok anatomi (gaya ACDE): hanya kanal `ids` yang masuk ke backbone.
+    """One model per anatomical group: only the channels `ids` enter the backbone.
 
-    Tanpa informasi kanal beranotasi (ch diabaikan). Normalisasi dan channel dropout
-    tetap dihitung di 22 kanal oleh train.py, lalu dipotong di sini.
+    No annotated-channel information is used (ch is ignored). Normalization and
+    channel dropout are computed on all 22 channels by train.py; the group's
+    channels are selected here.
     """
     def __init__(self, base, ids):
         super().__init__()
@@ -250,13 +253,13 @@ class ChannelSubset(nn.Module):
 
 
 def build_model(cfg, n_ch, feat_dim, glob_dim=0):
-    # Unrelated experiment from a separate project; not part of this repo
-    # and never enabled by any config in configs/config.yaml here.
+    # Unrelated experimental architecture from a separate project; not part of
+    # this repository and never enabled by the configs shipped here.
     if cfg["model"].get("chain_expert", {}).get("enabled", False):
         from chain_expert import ChainExpert
         return ChainExpert(cfg, n_ch, feat_dim, glob_dim)
     ids = cfg["model"].get("channel_subset")
-    if ids:   # one independently-trained model per anatomical channel group
+    if ids:   # one independently trained model per anatomical channel group
         ids = [int(i) for i in ids]
         base = CNNResBiLSTMAttention(cfg, len(ids), feat_dim, glob_dim)
         return ChannelSubset(base, ids)

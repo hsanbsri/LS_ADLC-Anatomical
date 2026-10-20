@@ -1,7 +1,7 @@
-"""precompute_feats.py — hitung fitur DWT sekali per (split, arm) -> .npy.
+"""precompute_feats.py — DWT subband features, computed once per (split, arm) -> .npy.
 
-Normalisasi bersifat deterministik, jadi pra-komputasi ini identik dengan
-menghitungnya di dalam DataLoader, tapi tanpa biaya per-epoch.
+Normalization is deterministic, so precomputing the features is identical to
+computing them on the fly, without the per-epoch cost.
 """
 import argparse, os, sys, time
 import h5py, numpy as np

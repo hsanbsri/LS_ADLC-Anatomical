@@ -1,28 +1,21 @@
 # =============================================================================
-# TUEV 6-kelas — konfigurasi tunggal. Skrip TIDAK boleh hardcode nilai di sini.
+# TUEV, 6 classes — single configuration file. Scripts never hard-code values
+# found here; every run states the keys it changes with --set a.b.c=value (see
+# scripts/*.sh). Some defaults below differ from the settings used in the
+# paper (e.g. split.mode, val_fraction, early_stop.monitor, channel_dropout,
+# max_pool, periodicity, laterality); the run scripts override them explicitly.
 #
-# Keputusan desain & alasannya didokumentasikan di DESIGN.md. Ringkasnya:
-#  - window 5 s, dipusatkan di event  -> sebanding protokol BIOT/LaBraM/EEGMamba
-#  - 1 sampel = 1 event (kanal,t0,t1) -> anotasi TUEV memang per-kanal
-#  - notch 60/120 Hz WAJIB            -> 60 Hz = 77,3% energi total (diukur)
-#  - lowpass 80 Hz (bukan 40)         -> agar 7 subband DWT semuanya hidup
-#  - filter di REKAMAN PENUH          -> hindari artefak tepi pada window 5 s
-#  - split subject-disjoint eksplisit -> val diambil dari 290 pasien train
-# =============================================================================
-#
-# NOTE FOR THIS REPOSITORY (LS-ADLC-Anatomical): this config file is shared
-# across a larger research project and documents many ablations/switches not
-# used by this specific paper (e.g. the GWO, TUSZ, and binary-pretraining
-# sections below). Only the keys explicitly overridden with --set in
-# scripts/run_pE1_baseline.sh, scripts/run_oof_knn.sh, scripts/run_pG.sh, and
-# scripts/run_pLS.sh — plus this file's own defaults for everything those
-# scripts do NOT override — determine what this paper's two arms (pG, pLS)
-# actually ran. "DESIGN.md" referenced above is internal project
-# documentation and is not included in this repository.
+# Design choices:
+#  - 5-s windows centred on each annotated event
+#  - 1 sample = 1 annotated event (channel, t0, t1); TUEV annotations are per channel
+#  - 60/120 Hz notch                 -> line noise dominates the raw signal
+#  - 80 Hz low-pass (not 40)         -> all 7 DWT subbands carry signal
+#  - filtering on the WHOLE recording -> no edge artefacts in the 5-s windows
+#  - explicit subject-disjoint split -> internal validation carved from the training pool
 # =============================================================================
 
 paths:
-  project_root: null            # null -> parent dari configs/
+  project_root: null            # null -> parent of configs/
   dataset_root: "../dataset"
   edf_subdir: "edf"
   cache_dir: "data"
@@ -31,36 +24,36 @@ paths:
   ckpt_dir: "checkpoints"
 
 windowing:
-  fs: 250.0                     # SEMUA 518 EDF native 250 Hz -> tanpa resample
-  window_sec: 5.0               # -> 1250 sampel
+  fs: 250.0                     # all TUEV EDF files are natively 250 Hz -> no resampling
+  window_sec: 5.0               # -> 1250 samples
   center_on_event: true         # ct = (t0+t1)/2, window = [ct-2.5, ct+2.5)
-  shift_at_edges: true          # geser (bukan buang) bila menabrak tepi rekaman
-  min_record_sec: 5.0           # rekaman lebih pendek dilewati (min korpus = 10 s)
+  shift_at_edges: true          # shift (do not drop) windows that hit a recording edge
+  min_record_sec: 5.0           # shorter recordings are skipped
 
 channels:
   montage_name: "ACNS_TCP_AR"
   source: "dataset/AAREADME.txt (TUH EEG Event Corpus v2.0.0)"
   n_channels: 22
   montage:
-    - ["FP1","F7"]   # 0
+    - ["FP1","F7"]   # 0   temporal chain (left)
     - ["F7","T3"]    # 1
     - ["T3","T5"]    # 2
     - ["T5","O1"]    # 3
-    - ["FP2","F8"]   # 4
+    - ["FP2","F8"]   # 4   temporal chain (right)
     - ["F8","T4"]    # 5
     - ["T4","T6"]    # 6
     - ["T6","O2"]    # 7
-    - ["A1","T3"]    # 8
+    - ["A1","T3"]    # 8   transverse central chain
     - ["T3","C3"]    # 9
     - ["C3","CZ"]    # 10
     - ["CZ","C4"]    # 11
     - ["C4","T4"]    # 12
     - ["T4","A2"]    # 13
-    - ["FP1","F3"]   # 14
+    - ["FP1","F3"]   # 14  parasagittal chain (left)
     - ["F3","C3"]    # 15
     - ["C3","P3"]    # 16
     - ["P3","O1"]    # 17
-    - ["FP2","F4"]   # 18
+    - ["FP2","F4"]   # 18  parasagittal chain (right)
     - ["F4","C4"]    # 19
     - ["C4","P4"]    # 20
     - ["P4","O2"]    # 21
@@ -69,164 +62,142 @@ channels:
   aliases: {T7: "T3", T8: "T4", P7: "T5", P8: "T6"}
 
 labels:
-  # kode numerik .rec menurut AAREADME v2.0.0
+  # numeric .rec codes as documented in AAREADME v2.0.0
   code_to_class: {1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5}
   class_names: ["SPSW", "GPED", "PLED", "EYEM", "ARTF", "BCKG"]
 
-# --- Filter: dijalankan SEKALI pada rekaman penuh, sebelum window dipotong ----
+# --- Filtering: applied ONCE to the whole recording, before windowing ---------
 filtering:
   notch:
     enabled: true
-    freqs: [60.0, 120.0]        # 60 Hz terukur 34.000x baseline; 120 = harmonik
+    freqs: [60.0, 120.0]        # line frequency and its harmonic
     method: "iirnotch"
-    quality: 30.0               # Q; -3dB bandwidth = f0/Q = 2 Hz @60 Hz
+    quality: 30.0               # Q; -3 dB bandwidth = f0/Q = 2 Hz at 60 Hz
     zero_phase: true
   bandpass:
     enabled: true
     filter: "butter"
     order: 4
     low_hz: 0.5
-    high_hz: 80.0               # 40 -> 80: lihat DESIGN.md §band-DWT
+    high_hz: 80.0
     output: "sos"
     method: "sosfiltfilt"
 
-# --- Statistik robust per-rekaman (untuk arm B) ------------------------------
-# Dihitung pada rekaman PENUH yang sudah difilter, per kanal montase.
-# Tidak memakai label apa pun -> bukan kebocoran; ini kalibrasi amplitudo
-# terhadap latar rekaman itu sendiri, persis cara klinisi membaca spike.
+# --- Robust per-recording statistics (used by normalization arm B only) ------
+# Computed on the WHOLE filtered recording, per montage channel, without any
+# label (no leakage).
 recording_stats:
   center: "median"
-  scale: "iqr"                  # IQR/1.349 ~ sigma untuk gaussian
+  scale: "iqr"                  # IQR/1.349 ~ sigma of a Gaussian
   iqr_to_sigma: 1.349
   eps: 1.0e-6
 
-# --- Arm normalisasi (ablasi) ------------------------------------------------
+# --- Normalization arms (the paper uses arm A) --------------------------------
 normalization:
   arms:
-    A: {mode: "per_window_zscore", note: "baseline pipeline lama; amplitudo absolut HILANG"}
-    B: {mode: "per_recording_robust", note: "amplitudo spike relatif latar DIPERTAHANKAN"}
-  clip_sigma: 20.0              # clip setelah normalisasi, redam artefak ekstrem
+    A: {mode: "per_window_zscore", note: "per-window z-score; absolute amplitude removed"}
+    B: {mode: "per_recording_robust", note: "spike amplitude relative to the recording background is kept"}
+  clip_sigma: 20.0              # clip after normalization, damps extreme artefacts
 
-# --- Fitur DWT (cabang spektral) ---------------------------------------------
+# --- DWT features (spectral branch) -------------------------------------------
 wavelet:
   enabled: true
   family: "db4"
-  level: 6                      # @250 Hz -> A6 0-1.95 | D6 1.95-3.9 | D5 3.9-7.8
-                                #            D4 7.8-15.6 | D3 15.6-31.25
-                                #            D2 31.25-62.5 | D1 62.5-125
+  level: 6                      # at 250 Hz -> A6 0-1.95 | D6 1.95-3.9 | D5 3.9-7.8
+                                #              D4 7.8-15.6 | D3 15.6-31.25
+                                #              D2 31.25-62.5 | D1 62.5-125
   n_subbands: 7
   stats: ["log_energy", "log_max_abs", "kurtosis"]   # -> 22 x 21
   eps: 1.0e-8
 
-# --- Fitur triad epileptiform ------------------------------------------------
-# Matriks konfusi menunjukkan kesalahan dominan ADA DI DALAM triad epileptiform:
-# PLED lebih sering diprediksi SPSW (35,4%) daripada benar (34,3%); SPSW paling
-# sering jadi GPED (30,4%). Secara klinis ketiganya dibedakan dua sumbu:
-#   SPSW  tidak periodik, fokal
-#   PLED  PERIODIK, LATERALISASI (satu hemisfer)
-#   GPED  PERIODIK, generalisata (bilateral)
-# Fitur DWT lama tidak memuat kedua sumbu itu sama sekali.
-# Cohen d terukur: PLED vs GPED lateralitas +1,182 | PLED vs SPSW periodisitas
-# +1,208 | SPSW vs GPED periodisitas -0,983.
+# --- Optional periodicity / laterality features (disabled in the paper) ------
 periodicity:
   enabled: true
-  band_hz: [0.5, 3.0]           # laju discharge khas PLED/GPED
-  smooth_ms: 40                 # penghalus envelope |x|
+  band_hz: [0.5, 3.0]           # typical discharge rate of periodic discharges
+  smooth_ms: 40                 # smoothing of the envelope |x|
   stats: ["log_peak_power", "peak_freq", "periodicity_index"]
 
 laterality:
   enabled: true
-  # indeks montase TCP -> hemisfer (AAREADME, montage 0..21)
+  # TCP montage index -> hemisphere
   left:  [0, 1, 2, 3, 8, 9, 10, 14, 15, 16, 17]
   right: [4, 5, 6, 7, 11, 12, 13, 18, 19, 20, 21]
-  # pasangan simetris kiri-kanan
+  # symmetric left-right pairs
   pairs: [[0,4],[1,5],[2,6],[3,7],[8,13],[9,12],[10,11],
           [14,18],[15,19],[16,20],[17,21]]
   eps: 1.0e-12
 
-# --- Split subject-disjoint --------------------------------------------------
+# --- Subject-disjoint split ---------------------------------------------------
 split:
-  mode: "iterative"             # "iterative" | "alphabetical_tail" (split RESMI CBraMod)
-  val_fraction: 0.15            # dari 290 pasien train
+  mode: "iterative"             # "iterative" | "alphabetical_tail" (the paper uses alphabetical_tail)
+  val_fraction: 0.15            # the paper uses 0.2
   stratify_on: "rarest_class_presence"
   seed: 42
 
-# --- Model -------------------------------------------------------------------
+# --- Model --------------------------------------------------------------------
 model:
   name: "CNN-Res-BiLSTM-Attention"
   temporal:
-    residual: true          # saklar ablasi: false = blok konvolusi polos tanpa jalur pintas
+    residual: true          # ablation switch: false = plain convolutional blocks without shortcut
     stem_channels: 64
-    res_blocks: [64, 128, 128, 256]   # tiap blok stride-4 downsample
-    block_strides: [2, 2, 2, 2]   # pilot resolusi: [2,1,1,1] -> 313 token x 16 ms (default = 40 x 125 ms)
+    res_blocks: [64, 128, 128, 256]   # each block downsamples by its stride
+    block_strides: [2, 2, 2, 2]   # default: 40 tokens x 128 ms
     kernel_size: 7
     dropout: 0.1
   spectral:
     hidden: 128
     out_dim: 64
     dropout: 0.1
-  global_feats:                 # vektor lateralitas (lihat blok laterality)
+  global_feats:                 # optional laterality vector (see the laterality block)
     enabled: true
     hidden: 32
   lstm:
-    enabled: true           # saklar ablasi: false = lewati BiLSTM
+    enabled: true           # ablation switch: false = skip the BiLSTM
     hidden: 128                 # bidirectional -> 256
     layers: 1
     dropout: 0.0
   mamba:
-    # Pilot resolusi (PRAREGISTRASI_paper_pilot_resolusi.md): Bi-Mamba pengganti BiLSTM. Default MATI.
+    # optional bidirectional Mamba replacing the BiLSTM; off
     enabled: false
     proj: 128
     d_state: 16
     d_conv: 4
     expand: 2
-  # Satu model per kelompok anatomi (ACDE-style). null = mati, perilaku strict tidak berubah.
-  # Isi dengan daftar indeks kanal, mis. [0,1,2,3,4,5,6,7]. Tanpa info kanal beranotasi.
+  # One model per anatomical group: list of channel indices, e.g. [0,1,2,3,4,5,6,7]
+  # (temporal), [8,9,10,11,12,13] (central), [14,...,21] (parasagittal).
+  # null = single full-montage model.
   channel_subset: null
   chain_expert:
-    # Paper A: 3 rantai montase + late fusion gate attention (scripts/chain_expert.py).
-    # Default MATI. Skala 0,567 dikunci di prereg: total 1.869.761 (+0,16% dari E1 1.866.822).
-    # Partisi rantai dikunci di kode (CHAINS): temporal 0..7, central 8..13, parasagittal 14..21.
+    # unrelated experimental architecture from a separate project; always off here
     enabled: false
     scale: 0.567
   transformer:
-    # Pengganti BiLSTM (mutually exclusive). Default DIMATIKAN.
-    # layers/heads/ff_dim disetel agar jumlah parameter SETARA BiLSTM (~395 rb)
-    # supaya perbandingannya adil, bukan menang karena lebih besar.
+    # optional Transformer replacing the BiLSTM (mutually exclusive); off
     enabled: false
     layers: 1
     heads: 4
     ff_dim: 256
     dropout: 0.1
   attention:
-    enabled: true           # saklar ablasi: false = mean pooling atas waktu
+    enabled: true           # ablation switch: false = mean pooling over time
     dim: 128
-  # Channel query: anotasi TUEV terikat pada SATU kanal, sementara window memuat
-  # seluruh 22 kanal. Tanpa ini, 8,6 event pada segmen waktu yang sama menjadi
-  # input yang IDENTIK (83.932 window train = hanya 9.735 input unik).
+  # optional channel query (embedding of the annotated channel); off in the paper
   channel_query:
-    enabled: false              # dinyalakan lewat --variant chanquery
+    enabled: false              # switched on with --variant chanquery
     emb_dim: 32
-    film: true                  # modulasi FiLM pada laten temporal
-  # --- Perbaikan yang menyasar diagnosis SPSW -------------------------------
-  # Terukur: baris SPSW yang TAK PERNAH terpecahkan justru LEBIH TAJAM
-  # (amplitudo 3,01 vs 2,73 | kecuraman 0,73 vs 0,52 | kurtosis 0,46 vs -0,16).
-  # Jadi buktinya ada tapi dibuang model. Dua sebab aritmetis:
-  #   (a) stem Conv1d(22->64) mencampur 22 kanal di lapisan PERTAMA
-  #   (b) stride 2^5 = 32x -> 1 langkah = 128 ms, sedangkan spike 20-70 ms,
-  #       lalu attention pooling MERATA-RATAKAN 39 langkah
+    film: true                  # FiLM modulation of the temporal representation
   max_pool:
-    enabled: false              # (A) spike adalah MAKSIMUM, bukan rata-rata
+    enabled: false              # global max pooling over time next to attention pooling (on in the paper)
   ann_channel_branch:
-    enabled: false              # (C) rutekan SINYAL kanal yang dianotasi
-    channels: [32, 64]          # downsampling hanya 4x -> 1 langkah = 16 ms
+    enabled: false              # optional branch on the annotated channel's signal; off
+    channels: [32, 64]
     kernel_size: 7
     stride: 2
-  latent_dim: 256               # Z
+  latent_dim: 256               # z
   head_dropout: 0.3
   n_classes: 6
 
-# --- Training ----------------------------------------------------------------
+# --- Training -----------------------------------------------------------------
 training:
   epochs: 40
   batch_size: 256
@@ -237,16 +208,12 @@ training:
   warmup_epochs: 2
   grad_clip: 1.0
   amp_dtype: "bf16"
-  loss: "ce"                    # baseline jujur: TANPA class weighting.
-                                # Alasan: reweighting 1/f (83x) terbukti
-                                # MEMPERBURUK SPSW pada korpus ini.
+  loss: "ce"                    # plain cross-entropy, no class weighting
   label_smoothing: 0.0
   early_stop:
-    # CATATAN (2026-09-11): balanced accuracy = rata-rata recall dan MENGABAIKAN
-    # presisi. Model yang belum konvergen dan menyebar prediksi ke kelas langka
-    # mendapat balAcc tinggi sementara kappa & weighted-F1 kolaps. Terjadi pada
-    # 4 dari 25 run (epoch terbaik = 1). min_epochs adalah pagar untuk itu;
-    # kriteria alternatif diuji lewat --monitor dan dilaporkan TERPISAH.
+    # The paper selects checkpoints on validation Cohen's kappa (--monitor cohen_kappa):
+    # balanced accuracy ignores precision and can favour unconverged models that
+    # spread predictions over rare classes. min_epochs guards against epoch-1 picks.
     monitor: "val_balanced_accuracy"
     mode: "max"
     patience: 10
@@ -254,75 +221,64 @@ training:
   num_workers: 8
   seeds: [42]
 
-  # --- Augmentasi: melawan replikasi 8,6x --------------------------------------
-  # 83.932 window train hanya 9.735 input unik. channel_dropout dipilih karena
-  # memaksa kemandirian spasial: model tak boleh bergantung pada satu kanal saja.
   augment:
     channel_dropout:
-      enabled: false          # dinyalakan lewat --set
-      p: 0.3                  # peluang augmentasi diterapkan per sampel
-      n_channels: 12          # jumlah kanal di-nol-kan bila diterapkan
-      protect_query: true     # jangan pernah buang kanal yang sedang ditanyakan
+      enabled: false          # switched on with --set (on in the paper)
+      p: 0.3                  # probability of applying it to a sample
+      n_channels: 12          # number of channels zeroed when applied (of the 22-channel montage)
+      protect_query: true     # never drop the queried channel (channel-query variant only)
 
-# --- LS-ADLC saat pelatihan penuh (encoder TIDAK dibekukan) ----------------
-# Seluruh uji LS-ADLC sebelumnya memakai encoder beku, mengikuti diagram alur
-# kerja. Di sini augmentasi laten MEMBENTUK representasi, bukan mengganggu
-# representasi yang sudah jadi. latent_augment_config.yaml memang menetapkan
-# "backbone TRAINABLE"; diagramnya yang menyimpang.
-# Parameter operasi = default terkalibrasi dari latent_augment_config.yaml
-# (variants.combined_B).
+# --- LS-ADLC during full training (the encoder is NOT frozen) ----------------
 lsadlc_train:
-  enabled: false
-  point: "B"                    # Z (B,256), sesuai diagram
-  gate: "pair"                  # pair | none  (percentile terbukti tak bersinyal)
-  ops:
+  enabled: false                # switched on with --lsadlc
+  point: "B"                    # latent z (B, 256)
+  gate: "pair"                  # pair | none | adlc (the paper uses --lsadlc adlc)
+  ops:                          # generic latent operators (not used by the adlc gate)
     gaussian_noise:      {p: 0.5, sigma_ratio: 0.02}
     feature_scale:       {p: 0.5, range: [0.9, 1.1]}
     feature_dim_dropout: {p: 0.1, ratio: 0.05}
     structured_dropout:  {p: 0.3, max_ratio: 0.05}
 
-  # --- LS-ADLC setia-ADLC (mode --lsadlc adlc), diadaptasi ke deep learning --
-  # ADLC asli (Sunaryono dkk. 2025): k-NN -> sampel confidence < ambang ->
-  # int(num_augmented*ratio) salinan + Gaussian noise DITAMBAHKAN ke data latih;
-  # ratio dinamis (Algoritma 1). Adaptasi: di laten Z, confidence k-NN OOF
-  # (proporsi tetangga sekelas-label, berbobot 1/jarak), hanya kelas minoritas,
-  # noise = alpha * std laten per-dimensi per-kelas, encoder ikut dilatih.
+  # --- LS-ADLC as in the paper (--lsadlc adlc), Algorithms 1-2 -----------------
+  # ADLC (Sunaryono et al. 2025): k-NN confidence -> samples below a threshold ->
+  # int(num_augmented * ratio) Gaussian-perturbed copies ADDED to the training
+  # data, with a dynamic ratio. Adaptation: in the latent z, out-of-fold k-NN
+  # vote (distance-weighted share of same-label neighbours), minority classes
+  # only, noise = alpha * per-dimension latent SD of the class, encoder trained.
   adlc:
-    knn_file: "oof_po_A_knn.npz"
-    k: 15                       # tengah rentang Optuna ADLC asli (1-30)
+    knn_file: "oof_po_A_knn.npz"  # overridden per group, e.g. oof_pG_temporal.npz
+    k: 15                       # midpoint of the original ADLC search range (1-30)
     weighted: true
-    threshold: 0.8              # bawaan ADLC asli
-    threshold_low: 0.0          # >0 = buang 'outlier' (varian borderline)
-    syn_weight: 1.0             # bobot loss salinan sintetis (1 = setara sampel asli)
-    start_epoch: 1              # sintesis baru aktif mulai epoch ini
-    synth_mode: noise           # noise | mixup (interpolasi laten sekelas)
-    focal_gamma: 0.0            # >0 = focal loss
-    tau_low_min_borderline: 0   # >0: kelas dgn borderline < nilai ini -> batas bawah > 0
-    alpha: 0.5                  # skala noise relatif std kelas
-    num_augmented: 10           # bawaan ADLC asli
-    max_ratio: 0.5              # bawaan ADLC asli (Algoritma 1)
-    min_ratio: 0.1              # bawaan ADLC asli
-    exclude_classes: [5]        # BCKG = satu-satunya kelas > 1/6 data latih
-    control_random: false       # kontrol: baris acak, jumlah per-kelas = gerbang
+    threshold: 0.8              # original ADLC default (tau)
+    threshold_low: 0.0          # >0 = drop 'outliers' (exploratory variant; 0 in the paper)
+    syn_weight: 1.0             # loss weight of synthetic rows (1 = same as real rows)
+    start_epoch: 1              # synthesis is active from this epoch on
+    synth_mode: noise           # noise (paper) | mixup | mixup_pre (exploratory)
+    focal_gamma: 0.0            # >0 = focal loss (exploratory; 0 in the paper)
+    tau_low_min_borderline: 0   # exploratory; 0 in the paper
+    alpha: 0.5                  # noise scale relative to the class SD
+    num_augmented: 10           # original ADLC default (base number of copies)
+    max_ratio: 0.5              # original ADLC default
+    min_ratio: 0.1              # original ADLC default
+    exclude_classes: [5]        # BCKG, the only class above 1/6 of the training data
+    control_random: false       # control: random rows with the gate's per-class counts
 
 evaluation:
   metrics: ["balanced_accuracy", "cohen_kappa", "macro_f1", "weighted_f1",
             "per_class_f1", "per_class_sensitivity", "confusion_matrix"]
 
 runtime:
-  # deterministic=true: cudnn.deterministic, benchmark mati, cuBLAS deterministik.
-  # Temuan 2026-09-13: dengan benchmark=true, seed+config IDENTIK berselisih
-  # hingga 2,8 pp antar run. Wajib true untuk angka yang dilaporkan di paper.
+  # deterministic=true: cudnn.deterministic, benchmark off, deterministic cuBLAS.
+  # Required for the reported numbers (the run scripts set it to true).
   deterministic: false
-  # mmap=true: X dibaca lewat np.memmap dari .npy, sehingga SEMUA proses berbagi
-  # satu salinan di page cache OS alih-alih menyalin ~13 GB ke heap masing-masing.
-  # Nilai yang dibaca identik; hanya sumber memorinya yang berbeda.
+  # mmap=true: X is read through np.memmap from the .npy file, so all processes
+  # share one copy in the OS page cache. Values read are identical.
   mmap: true
-  # gpu_cache=true: X/F/med/scale/chan dipindah ke VRAM SEKALI, sehingga loop
-  # latih tidak menyalin host->device tiap batch. Nilai float32 identik, jadi
-  # hasil bit-identik; hanya wall-time yang berubah. Otomatis dilewati bila
-  # tidak muat (mis. lengan ADLC yang datanya diperluas).
+  # gpu_cache=true: X/F/med/scale/chan are moved to VRAM ONCE, so the training
+  # loop does not copy host->device every batch. Values are identical, results
+  # bit-identical; only wall time changes. Skipped automatically when the data
+  # do not fit.
   gpu_cache: false
   n_jobs: 12
   seed: 42
-  h5_compression: null          # tanpa kompresi -> baca cepat saat training
+  h5_compression: null          # no compression -> fast reads during training
