@@ -1,4 +1,4 @@
-"""oof_encoder.py — out-of-fold (OOF) k-NN confidence gate of LS-ADLC (Algorithm 1).
+"""oof_encoder.py: out-of-fold (OOF) k-NN confidence gate of LS-ADLC (Algorithm 1).
 
 Why a dedicated encoder per fold: latents extracted from an encoder trained on
 the WHOLE training pool make any latent-space confidence circular (the encoder

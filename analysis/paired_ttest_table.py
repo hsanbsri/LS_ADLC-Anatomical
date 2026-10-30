@@ -1,4 +1,4 @@
-"""paired_ttest_table.py: pLS vs. pG on the fused ensemble (Tables 7, 8 and 10, Fig. 5).
+"""paired_ttest_table.py: pLS vs. pG on the fused ensemble (Tables 5, 6 and 8, Fig. 5).
 
 For TUEV batch 1 (seeds 42-66), TUEV batch 2 (seeds 100-124) and the same two
 batches on TUSZ, the script fuses the three anatomical-group models of each
@@ -71,7 +71,7 @@ def run():
 
 def check(out):
     """Assert agreement with the numbers already printed in the paper."""
-    ms = {  # (mean diff, CI low, CI high, p, q) as reported, TUEV Tables 7 and 8
+    ms = {  # (mean diff, CI low, CI high, p, q) as reported, TUEV Tables 5 and 6
         ("TUEV_batch1", "Balanced accuracy"): (2.57, 1.08, 4.06, 0.0016, 0.0065),
         ("TUEV_batch1", "Cohen's kappa"): (0.21, -0.67, 1.09, 0.63, 0.63),
         ("TUEV_batch1", "Weighted-F1"): (0.20, -0.21, 0.61, 0.32, 0.43),
@@ -85,7 +85,7 @@ def check(out):
         r = out[c][k]
         assert abs(r["mean_diff"] - dm) < 0.006 and abs(r["ci_low"] - lo) < 0.006 and abs(r["ci_high"] - hi) < 0.006, (c, k, r)
         assert abs(r["p"] - p) < 0.6 * 10 ** np.floor(np.log10(p)) and abs(r["q"] - q) < 0.6 * 10 ** np.floor(np.log10(q)), (c, k, r)
-    tusz = {  # (mean diff, q) as reported, Table 10
+    tusz = {  # (mean diff, q) as reported, Table 8
         ("TUSZ_batch1", "Balanced accuracy"): (5.18, 1.1e-9), ("TUSZ_batch2", "Balanced accuracy"): (3.59, 3.2e-5),
         ("TUSZ_batch1", "Cohen's kappa"): (8.74, 2.6e-9), ("TUSZ_batch2", "Cohen's kappa"): (5.90, 3.2e-5),
         ("TUSZ_batch1", "Weighted-F1"): (2.01, 5.8e-9), ("TUSZ_batch2", "Weighted-F1"): (1.34, 3.8e-5),

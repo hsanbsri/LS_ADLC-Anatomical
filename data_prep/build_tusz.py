@@ -1,4 +1,4 @@
-"""build_tusz.py — TUSZ v2.0.5 EDF + .csv  ->  HDF5 cache of 5-s windows (binary task).
+"""build_tusz.py: TUSZ v2.0.5 EDF + .csv  ->  HDF5 cache of 5-s windows (binary task).
 
 Scope: the WHOLE corpus.
   - all three montages. A bipolar montage cancels the reference (FP1-REF minus

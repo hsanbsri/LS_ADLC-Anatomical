@@ -1,4 +1,4 @@
-"""latent_ops.py — generic latent-space augmentation operators.
+"""latent_ops.py: generic latent-space augmentation operators.
 
 Imported by train.py for its generic latent-augmentation option. The LS-ADLC
 configuration used in the paper (gate "adlc", synth_mode "noise") does NOT use

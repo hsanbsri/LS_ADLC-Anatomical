@@ -3,7 +3,7 @@ fig5_replication.py
 ===================
 Fig. 5: forest-style plot of the pLS-vs-pG effect (balanced accuracy,
 SPSW-F1) across the two independent 25-seed batches. Numbers are taken
-directly from Tables 7 and 8 (analysis/paired_ttest_table.py is the
+directly from Tables 5 and 6 (analysis/paired_ttest_table.py is the
 source of record; the literal values are reproduced here so
 this script has no runtime dependency on that file's exact schema).
 Writes figures/output/fig5_replication.{png,pdf}.
@@ -41,7 +41,7 @@ def main():
             ax.errorbar(delta, y, xerr=[[err_lo], [err_hi]], fmt="o",
                          color="#2a5a8c", ecolor="#2a5a8c", capsize=4,
                          markersize=6, linewidth=1.6)
-            star = "***" if q <= 0.001 else "**" if q <= 0.01 else "*" if q <= 0.05 else "ns"   # notation of Table 4
+            star = "***" if q <= 0.001 else "**" if q <= 0.01 else "*" if q <= 0.05 else "ns"   # notation of Table 3
             ax.text(hi + 0.6, y, f"q={q:.4f}{star}", va="center", fontsize=8.5)
         ax.axvline(0, color="gray", linestyle="--", linewidth=1.0)
         ax.set_yticks(ys)

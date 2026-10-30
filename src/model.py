@@ -1,4 +1,4 @@
-"""model.py — two-branch CNN-Res-BiLSTM-Attention backbone.
+"""model.py: two-branch CNN-Res-BiLSTM-Attention backbone.
 
 Temporal branch : normalized signal (B, C, 1250)
                   -> Conv1d stem -> 4 residual blocks -> (B, 256, 40)

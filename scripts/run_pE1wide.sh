@@ -1,5 +1,5 @@
 #!/bin/bash
-# Capacity-matched single full-montage backbone pE1wide (5,473,414 parameters, Table 6). TUEV only.
+# Capacity-matched single full-montage backbone pE1wide (5,473,414 parameters, Table 4). TUEV only.
 # Usage: bash scripts/run_pE1wide.sh <first_seed> <last_seed>            (paper: 42 66)
 set -u
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

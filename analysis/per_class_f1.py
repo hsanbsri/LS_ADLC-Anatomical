@@ -1,4 +1,4 @@
-"""per_class_f1.py: per-class F1, pG vs. pLS, TUEV batch 2 (Table 9, Fig. 6).
+"""per_class_f1.py: per-class F1, pG vs. pLS, TUEV batch 2 (Table 7, Fig. 6).
 
 Group-level per-class F1 is read from the eval.per_class_f1 field of each
 run's JSON log; the fused-ensemble per-class F1 is computed from the

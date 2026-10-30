@@ -2,16 +2,16 @@
 
 Code for the paper
 
-> **Confidence-Driven Latent-Space Augmentation in an Anatomically
-> Partitioned Multichannel-EEG Ensemble for Epileptiform Event
-> Classification: A Replicated, Capacity-Matched Evaluation**
+> **Anatomically Partitioned Latent-Space Augmentation of Low-Confidence Samples for Rare Epileptiform Event Classification in Multichannel EEG**
+> Muhammad Hasan Basri, Dwi Sunaryono, Yudhi Purwananto, Riyanarto Sarno.
+> Department of Informatics, Institut Teknologi Sepuluh Nopember, Surabaya, Indonesia.
 > (under review)
 
 The 22-channel bipolar TCP montage is divided into three anatomical groups
 (temporal, central, parasagittal). Each group is classified by its own
 CNN-ResBiLSTM-Attention backbone, and the three groups are fused by the
 product rule. **LS-ADLC** is a latent-space extension of Augmented Data Low
-Confidence (ADLC; Sunaryono et al., 2025). Before training, an out-of-fold
+Confidence (ADLC, Sunaryono et al., 2025). Before training, an out-of-fold
 latent k-NN vote flags low-confidence minority-class windows. During
 training, Gaussian-perturbed latent copies of the flagged windows are added
 in each branch. LS-ADLC adds no parameters, so the two arms compared in the
@@ -40,17 +40,17 @@ m = 4 metrics per batch).
 | | Weighted-F1 | 85.11 | 86.45 | +1.34 | 3.8e-5 |
 
 Batch 1 (seeds 42–66) and the full statistics (mean ± SD of the paired
-differences, 95% CI, t, p) are in Tables 7, 8 and 10 of the paper. All of
+differences, 95% CI, t, p) are in Tables 5, 6 and 8 of the paper. All of
 them are reproduced by `analysis/paired_ttest_table.py`.
 
 ## Repository layout
 
 ```
-configs/      config.yaml (TUEV), config_tusz.yaml (TUSZ); all hyperparameters
+configs/      config.yaml (TUEV), config_tusz.yaml (TUSZ), all hyperparameters
 data_prep/    raw EDF -> cached windows (HDF5) and DWT features (.npy)
 src/          model, training loop, LS-ADLC gate
 scripts/      run scripts of every training run reported in the paper
-analysis/     statistics of Tables 6-10 and Section 3.5
+analysis/     statistics of Tables 4-8 and Section 3.4
 figures/      Figs. 1-6 of the paper
 ```
 
@@ -58,10 +58,10 @@ figures/      Figs. 1-6 of the paper
 |---|---|---|
 | `src/model.py` | CNN-ResBiLSTM-Attention backbone, channel-subset wrapper | Sect. 2.3, Fig. 3 |
 | `src/oof_encoder.py` | out-of-fold latent k-NN confidence gate (Stage A) | Algorithm 1, Eqs. 2–3 |
-| `src/train.py` | training of one group backbone, with or without LS-ADLC (Stage B); checkpoint selection; evaluation | Algorithm 2, Eqs. 4–5 |
-| `analysis/*.py` | product-rule fusion of the three groups, metrics and statistics | Algorithm 3, Eq. 1, Sect. 2.8 |
+| `src/train.py` | training of one group backbone, with or without LS-ADLC (Stage B), checkpoint selection, evaluation | Algorithm 2, Eqs. 4–5 |
+| `analysis/*.py` | product-rule fusion of the three groups, metrics and statistics | Algorithm S1 (Supplementary Material), Eq. 1, Sect. 2.8 |
 | `src/common.py`, `src/features.py` | configuration, montage, filtering, DWT features | Sect. 2.2 |
-| `src/latent_ops.py`, `src/lsadlc_v2.py` | alternative gates and latent operators imported by `train.py`; not used by the paper's configuration | |
+| `src/latent_ops.py`, `src/lsadlc_v2.py` | alternative gates and latent operators imported by `train.py`, not used by the paper's configuration | |
 
 ## Installation
 
@@ -87,7 +87,7 @@ University (https://isip.piconepress.com):
   (SPSW, GPED, PLED, EYEM, ARTF, BCKG).
 - **TUSZ**, TUH EEG Seizure Corpus, v2.0.5: binary seizure detection.
 
-Both corpora use their official subject-disjoint train/eval pools. For
+Both corpora use their official, disjoint train/eval pools. For
 checkpoint selection, the last 20% of the training subjects in alphabetical
 order are held out (`split.mode=alphabetical_tail`). The TUSZ dev pool is
 not used.
@@ -137,11 +137,11 @@ bash scripts/run_all.sh tusz 100 124    # TUSZ batch 2
 
 | Script | Runs |
 |---|---|
-| `run_oof_knn.sh <corpus>` | LS-ADLC gate for the three groups, `data*/oof_pG_<group>.npz` (once per corpus; independent of the seed) |
+| `run_oof_knn.sh <corpus>` | LS-ADLC gate for the three groups, `data*/oof_pG_<group>.npz` (once per corpus, independent of the seed) |
 | `run_pG.sh <corpus> <s1> <s2>` | control arm, 3 groups × seeds |
 | `run_pLS.sh <corpus> <s1> <s2>` | LS-ADLC arm, 3 groups × seeds |
-| `run_pE1_baseline.sh <s1> <s2>` | single full-montage backbone pE1, 1,866,822 parameters (TUEV, Table 6) |
-| `run_pE1wide.sh <s1> <s2>` | capacity-matched single backbone pE1wide, 5,473,414 parameters (TUEV, Table 6) |
+| `run_pE1_baseline.sh <s1> <s2>` | single full-montage backbone pE1, 1,866,822 parameters (TUEV, Table 4) |
+| `run_pE1wide.sh <s1> <s2>` | capacity-matched single backbone pE1wide, 5,473,414 parameters (TUEV, Table 4) |
 
 All settings are passed explicitly on the command line from
 `scripts/flags.sh`. pG and pLS differ only in `--lsadlc adlc` and the gate
@@ -153,27 +153,27 @@ probabilities `*_evalprob.npy`, and saves the selected checkpoint in
 
 | Setting | Value |
 |---|---|
-| Input | 5-s windows at 250 Hz; notch 60/120 Hz, band-pass 0.5–80 Hz; DWT (db4, level 6) features |
+| Input | 5-s windows at 250 Hz, notch 60/120 Hz, band-pass 0.5–80 Hz, DWT (db4, level 6) features |
 | Optimizer | AdamW, lr 1e-3, weight decay 1e-4, 2 warm-up epochs then cosine decay, batch 256, ≤ 40 epochs |
 | Checkpoint selection | best internal-validation Cohen's kappa, patience 10 |
 | Regularization | dropout 0.1 / 0.3 (head), channel dropout p = 0.3 over 12 channels, gradient clipping 1.0 |
 | LS-ADLC gate | out-of-fold k-NN vote, k = 15, distance-weighted, 5 subject-grouped folds, 15 epochs per fold, τ = 0.80, majority class excluded |
-| LS-ADLC synthesis | z + α σ_c ε with α = 0.5; copy ratio 0.45, 0.50 or 0.55 of 10 copies, i.e. 4 or 5 copies per flagged window (Eq. 5) |
+| LS-ADLC synthesis | z + α σ_c ε with α = 0.5, copy ratio 0.45, 0.50 or 0.55 of 10 copies, i.e. 4 or 5 copies per flagged window (Eq. 5) |
 
 ### 3. Statistics and figures
 
 ```bash
-python analysis/capacity_matched_single.py   # Table 6: pG vs. pE1 and pE1wide
-python analysis/paired_ttest_table.py        # Tables 7, 8, 10: pLS vs. pG, TUEV and TUSZ, both batches
-python analysis/per_class_f1.py              # Table 9: per-class F1, TUEV batch 2
-python analysis/precision_recall.py          # Section 3.5: precision and recall
+python analysis/capacity_matched_single.py   # Table 4: pG vs. pE1 and pE1wide
+python analysis/paired_ttest_table.py        # Tables 5, 6, 8: pLS vs. pG, TUEV and TUSZ, both batches
+python analysis/per_class_f1.py              # Table 7: per-class F1, TUEV batch 2
+python analysis/precision_recall.py          # Section 3.4: precision and recall
 python figures/make_figures.py               # Figs. 1-6 -> figures/output/
 ```
 
 The analysis scripts read only the `*_evalprob.npy`/JSON outputs and the
 evaluation labels. Their results are written to `analysis/output/`.
 `paired_ttest_table.py` asserts that every value agrees with the paper. The
-scripts locate the repository root automatically; set `LSADLC_ROOT` to point
+scripts locate the repository root automatically. Set `LSADLC_ROOT` to point
 them at a different results tree. `fig1_examples.py` also reads the raw TUEV
 EDF files.
 

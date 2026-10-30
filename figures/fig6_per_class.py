@@ -1,14 +1,14 @@
 """
 fig6_per_class.py
 =================
-Fig. 6: bar-chart visualization of Table 9 (per-class F1, batch 2,
+Fig. 6: bar-chart visualization of Table 7 (per-class F1, batch 2,
 seeds 100-124). Two panels:
   A. Fused-ensemble F1 per class, pG vs. pLS (all 6 classes).
   B. SPSW-F1 per anatomical group (temporal/central/parasagittal), pG vs.
      pLS -- visualizes the asymmetric per-branch effect discussed in
      Section 4 (gain concentrated in the parasagittal branch).
 
-All values are copied directly from Table 9 (analysis/per_class_f1.py
+All values are copied directly from Table 7 (analysis/per_class_f1.py
 is the source of record); this script does not recompute them. Drawn at final
 print size (7.48 in wide, fonts >= 6 pt) with no in-figure footnote.
 Writes figures/output/fig6_per_class_bar.{png,pdf}.

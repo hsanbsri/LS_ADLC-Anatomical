@@ -1,4 +1,4 @@
-"""lsadlc_v2.py — alternative gates and augmentation modes (exploratory).
+"""lsadlc_v2.py: alternative gates and augmentation modes (exploratory).
 
 Imported by train.py for its alternative "pair" gate. The LS-ADLC configuration
 used in the paper (gate "adlc": out-of-fold latent k-NN vote, Eqs. 2-3) does

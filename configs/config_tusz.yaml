@@ -1,5 +1,5 @@
 # =============================================================================
-# TUSZ, binary seizure detection — same settings as configs/config.yaml except the
+# TUSZ, binary seizure detection, same settings as configs/config.yaml except the
 # lines marked [TUSZ]. Single configuration file. Scripts never hard-code values
 # found here; every run states the keys it changes with --set a.b.c=value (see
 # scripts/*.sh). Some defaults below differ from the settings used in the

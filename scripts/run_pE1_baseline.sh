@@ -1,5 +1,5 @@
 #!/bin/bash
-# Single full-montage backbone pE1 (1,866,822 parameters; exploratory comparison, Table 6). TUEV only.
+# Single full-montage backbone pE1 (1,866,822 parameters; exploratory comparison, Table 4). TUEV only.
 # Usage: bash scripts/run_pE1_baseline.sh <first_seed> <last_seed>       (paper: 42 66)
 set -u
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

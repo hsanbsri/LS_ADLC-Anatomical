@@ -1,4 +1,4 @@
-"""capacity_matched_single.py: three-group ensemble vs. single full-montage backbones (Table 6).
+"""capacity_matched_single.py: three-group ensemble vs. single full-montage backbones (Table 4).
 
 TUEV, seeds 42-66. Contrasts, each with a paired t-test over seeds,
 Benjamini-Hochberg correction (m = 4 metrics) and the 95% CI of the mean

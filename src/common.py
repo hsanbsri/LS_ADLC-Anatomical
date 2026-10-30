@@ -1,4 +1,4 @@
-"""common.py — config loader, bipolar montage, filter chain, subject-disjoint split.
+"""common.py: config loader, bipolar montage, filter chain, subject-disjoint split.
 
 No absolute paths: project_root is derived from the location of this file.
 """

@@ -1,4 +1,4 @@
-"""build_windows.py — TUEV EDF + .rec  ->  HDF5 cache of 5-s windows, 6 classes.
+"""build_windows.py: TUEV EDF + .rec  ->  HDF5 cache of 5-s windows, 6 classes.
 
 One sample = one annotated event (channel, t0, t1) of a .rec file. TUEV
 annotations are per channel, so the same time segment can appear more than

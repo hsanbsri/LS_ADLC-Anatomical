@@ -1,4 +1,4 @@
-"""finalize_tusz_cache.py — add rec_med / rec_scale placeholders to the TUSZ cache.
+"""finalize_tusz_cache.py: add rec_med / rec_scale placeholders to the TUSZ cache.
 
 src/train.py (load_split) always reads rec_med/rec_scale, but normalization
 arm A (per-window z-score, used in the paper) never uses their values. The

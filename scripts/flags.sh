@@ -35,7 +35,7 @@ GROUP_FLAGS="$TRAIN_BASE $BACKBONE --set model.channel_query.enabled=false --set
 OOF_FLAGS="--config $CONFIG --keep-cd --knn --set split.mode=alphabetical_tail --set split.val_fraction=0.2 \
 --set periodicity.enabled=false --set laterality.enabled=false $BACKBONE"
 
-# Capacity-matched single full-montage backbone (pE1wide, Table 6): 5,473,414 parameters
+# Capacity-matched single full-montage backbone (pE1wide, Table 4): 5,473,414 parameters
 WIDE="--set model.temporal.stem_channels=113 --set model.temporal.res_blocks=[113,227,227,453] \
 --set model.lstm.hidden=227 --set model.attention.dim=227"
 

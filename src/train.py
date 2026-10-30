@@ -1,4 +1,4 @@
-"""train.py — train one model (one normalization arm, one seed) on the cached windows.
+"""train.py: train one model (one normalization arm, one seed) on the cached windows.
 
 Split discipline (cannot be overridden from the config):
   - the official evaluation pool is used ONCE, at the end, for reporting only.
@@ -554,7 +554,7 @@ def main():
         json.dump(res, fh, indent=2)
     np.save(os.path.join(cfg["paths"]["results_dir"], f"{run}_evalprob.npy"), prob)
 
-    print(f"\n=== {run} — EVALUATION (best epoch {best['epoch']}) ===")
+    print(f"\n=== {run}, EVALUATION (best epoch {best['epoch']}) ===")
     print(f"  balanced accuracy {me['balanced_accuracy']*100:6.2f}")
     print(f"  cohen kappa       {me['cohen_kappa']*100:6.2f}")
     print(f"  macro F1          {me['macro_f1']*100:6.2f}")

@@ -1,4 +1,4 @@
-"""precision_recall.py: per-class precision and recall, pG vs. pLS, TUEV batch 2 (Section 3.5).
+"""precision_recall.py: per-class precision and recall, pG vs. pLS, TUEV batch 2 (Section 3.4).
 
 Fused ensemble (Eq. 1) per class, and SPSW precision/recall of each anatomical
 group model; means over seeds 100-124 (zero_division = 0).

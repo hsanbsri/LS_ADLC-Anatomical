@@ -1,4 +1,4 @@
-"""precompute_feats.py — DWT subband features, computed once per (split, arm) -> .npy.
+"""precompute_feats.py: DWT subband features, computed once per (split, arm) -> .npy.
 
 Normalization is deterministic, so precomputing the features is identical to
 computing them on the fly, without the per-epoch cost.

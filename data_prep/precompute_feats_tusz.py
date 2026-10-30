@@ -1,4 +1,4 @@
-"""precompute_feats_tusz.py — DWT subband features of the TUSZ cache (arm A).
+"""precompute_feats_tusz.py: DWT subband features of the TUSZ cache (arm A).
 
 Uses the SAME functions as the TUEV pipeline (features.normalize + dwt_features).
 Arm A is a per-window z-score, so no per-recording statistics are needed.

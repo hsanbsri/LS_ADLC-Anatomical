@@ -1,4 +1,4 @@
-"""features.py — two normalization arms + DWT subband features.
+"""features.py: two normalization arms + DWT subband features.
 
 Arm A  per_window_zscore     : (x - mean_w) / (std_w + eps), per channel and window.
                                Absolute amplitude is removed. Used in the paper.

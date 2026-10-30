@@ -1,4 +1,4 @@
-"""export_npy.py — write X_<split>.npy next to win_<split>.h5 (optional, saves memory).
+"""export_npy.py: write X_<split>.npy next to win_<split>.h5 (optional, saves memory).
 
 With runtime.mmap = true (default), src/train.py and src/oof_encoder.py read the
 signal array X through np.memmap from <cache_dir>/X_<split>.npy when that file
