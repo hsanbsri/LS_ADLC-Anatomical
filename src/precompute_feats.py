@@ -5,7 +5,7 @@ computing them on the fly, without the per-epoch cost.
 """
 import argparse, os, sys, time
 import h5py, numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import load_config
 from features import (normalize, dwt_features, periodicity_features,
                       laterality_features, feat_dim, glob_dim)

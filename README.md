@@ -1,32 +1,208 @@
-# LS-ADLC in an anatomically partitioned EEG ensemble
+# LS-ADLC
 
-Code for the paper
+**Anatomically Partitioned Latent-Space Augmentation of Low-Confidence Samples for Rare Epileptiform Event Classification in Multichannel EEG**
 
-> **Anatomically Partitioned Latent-Space Augmentation of Low-Confidence Samples for Rare Epileptiform Event Classification in Multichannel EEG**
-> Muhammad Hasan Basri, Dwi Sunaryono, Yudhi Purwananto, Riyanarto Sarno.
-> Department of Informatics, Institut Teknologi Sepuluh Nopember, Surabaya, Indonesia.
-> (under review)
+A training method for imbalanced EEG classification. The 22-channel bipolar montage is split into three anatomical groups (temporal, central, parasagittal), each group is modeled by its own CNN-ResBiLSTM-Attention backbone, and the three streams are fused by the product rule. LS-ADLC identifies low-confidence minority samples in the latent space of each group and adds Gaussian-perturbed latent copies of them during training. It adds no parameters. The method is evaluated on TUEV and TUSZ.
 
-The 22-channel bipolar TCP montage is divided into three anatomical groups
-(temporal, central, parasagittal). Each group is classified by its own
-CNN-ResBiLSTM-Attention backbone, and the three groups are fused by the
-product rule. **LS-ADLC** is a latent-space extension of Augmented Data Low
-Confidence (ADLC, Sunaryono et al., 2025). Before training, an out-of-fold
-latent k-NN vote flags low-confidence minority-class windows. During
-training, Gaussian-perturbed latent copies of the flagged windows are added
-in each branch. LS-ADLC adds no parameters, so the two arms compared in the
-paper have identical capacity:
+## Paper
 
-| Arm | Description |
+Authors: Muhammad Hasan Basri, Dwi Sunaryono\*, Yudhi Purwananto, Riyanarto Sarno (\*corresponding author)
+
+"Anatomically Partitioned Latent-Space Augmentation of Low-Confidence Samples for Rare Epileptiform Event Classification in Multichannel EEG"
+
+Submit journal: Intelligent Medicine, under review.
+
+## Abstract
+
+Spike-and-sharp waves and other rare epileptiform events are among the most clinically relevant targets of automated electroencephalogram (EEG) interpretation, yet classifiers trained on clinical recordings are biased toward the dominant background class. Augmented Data Low Confidence (ADLC) synthesizes samples for low-confidence cases, but it operates in the input space of a single model and has not been evaluated with model capacity held fixed. Latent-Space ADLC (LS-ADLC) moves the confidence gate and the synthesis into the latent space of a neural network and applies them independently to each scalp region. The 22-channel bipolar montage is partitioned into temporal, central, and parasagittal groups, each processed by a dedicated convolutional-recurrent backbone. Within every group, low-confidence minority samples are identified by an out-of-fold k-nearest-neighbor vote with subject-disjoint folds, and Gaussian-perturbed latent copies of them are added during training. With identical parameter counts in both ensembles, the comparison isolates the augmentation from model size. On the Temple University Hospital EEG Events Corpus, LS-ADLC raised balanced accuracy by 2.5 to 2.6 points and spike-and-sharp-wave F1 by 9.4 to 9.6 points in two separate 25-seed batches (paired t-test, p<0.01), meeting a replication criterion fixed in advance, and reached balanced accuracy of 59.8%, Cohen's kappa of 70.6%, and weighted F1-score of 84.8%. On the Temple University Hospital EEG Seizure Corpus, all four metrics improved in both batches. Region-wise confidence-gated latent augmentation improves rare epileptiform event recognition without enlarging the model.
+
+## Repository Structure
+
+```
+LS_ADLC-Anatomical/
+├── README.md                          # this file
+├── requirements.txt                   # Python dependencies
+├── LICENSE                            # MIT license
+├── configs/
+│   ├── config.yaml                    # TUEV hyperparameters
+│   └── config_tusz.yaml               # TUSZ hyperparameters
+├── data/                              # caches go here (see data/README.md)
+│   └── README.md                      # how to obtain TUEV / TUSZ
+├── results/                           # experiment outputs (created at runtime, git-ignored)
+├── scripts/                           # run scripts of every training run
+│   ├── flags.sh                       # settings shared by all runs
+│   ├── run_all.sh                     # full queue for one corpus and one seed batch
+│   ├── run_oof_knn.sh                 # LS-ADLC gate of the three groups
+│   ├── run_pG.sh                      # control ensemble
+│   ├── run_pLS.sh                     # LS-ADLC ensemble
+│   ├── run_pE1_baseline.sh            # single full-montage backbone
+│   └── run_pE1wide.sh                 # capacity-matched single backbone
+└── src/                               # all source code
+    ├── common.py                      # configuration, montage, filtering
+    ├── features.py                    # DWT features
+    ├── model.py                       # CNN-ResBiLSTM-Attention, channel-subset wrapper
+    ├── latent_ops.py                  # latent operators imported by train.py
+    ├── lsadlc_v2.py                   # alternative gates imported by train.py
+    │
+    │  ── Stage A · data preparation ──
+    ├── build_windows.py               # TUEV: raw EDF to cached windows
+    ├── precompute_feats.py            # TUEV: DWT features
+    ├── build_tusz.py                  # TUSZ: raw EDF to cached windows
+    ├── finalize_tusz_cache.py         # TUSZ: finalize the window cache
+    ├── precompute_feats_tusz.py       # TUSZ: DWT features
+    ├── export_npy.py                  # optional memory-mapped export
+    │
+    │  ── Stage B · training ──
+    ├── oof_encoder.py                 # out-of-fold latent k-NN confidence gate
+    ├── train.py                       # one group backbone, with or without LS-ADLC
+    │
+    │  ── Stage C · evaluation ──
+    ├── ensemble_eval.py               # product-rule fusion, paired tests (Tables 5, 6, 8)
+    ├── ensemble_per_class.py          # per-class F1 (Table 7)
+    ├── ensemble_precision_recall.py   # precision and recall (Section 3.4)
+    └── baseline_single_backbone.py    # ensemble vs. single backbones (Table 4)
+```
+
+Run every command from the repository root. Results are written to `results/` (git-ignored) as JSON and `.npy` files, and checkpoints to `checkpoints/`.
+
+## Datasets
+
+Two public scalp-EEG corpora are used. Neither can be redistributed.
+
+| Dataset | Task | Source |
+|---|---|---|
+| TUEV (TUH EEG Events Corpus, v2.0.0) | 6-class event classification (SPSW, GPED, PLED, EYEM, ARTF, BCKG) | [NEDC](https://isip.piconepress.com) |
+| TUSZ (TUH EEG Seizure Corpus, v2.0.5) | Binary seizure detection | [NEDC](https://isip.piconepress.com) |
+
+See `data/README.md` for access and the expected folder layout.
+
+## Installation
+
+```bash
+git clone https://github.com/hsanbsri/LS_ADLC-Anatomical.git
+cd LS_ADLC-Anatomical
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Tested with Python 3.12, PyTorch 2.11 (CUDA 12.8) and one NVIDIA RTX 4080 SUPER (16 GB). A CUDA GPU is required for training. All runs use deterministic mode (`runtime.deterministic=true`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`), so results are bit-reproducible on the same hardware and software stack.
+
+## Usage
+
+### Stage A: data preparation
+
+TUEV (`paths.dataset_root` in `configs/config.yaml` must contain `edf/train/` and `edf/eval/`):
+
+```bash
+python src/build_windows.py    --split train           # data/win_train.h5
+python src/build_windows.py    --split eval            # data/win_eval.h5
+python src/precompute_feats.py --split train --arm A   # data/feat_train_A.npy
+python src/precompute_feats.py --split eval  --arm A   # data/feat_eval_A.npy
+python src/export_npy.py       --split train           # optional: data/X_train.npy
+```
+
+TUSZ (`--tusz-root` is the TUSZ `edf/` directory):
+
+```bash
+C=configs/config_tusz.yaml
+for s in train eval
+do
+  python src/build_tusz.py            --config $C --tusz-root /path/to/tusz/v2.0.5/edf --split $s
+  python src/finalize_tusz_cache.py   --config $C --split $s
+  python src/precompute_feats_tusz.py --config $C --split $s
+  python src/export_npy.py            --config $C --split $s
+done
+```
+
+### Stage B: training
+
+```bash
+bash scripts/run_all.sh tuev 42 66      # TUEV batch 1, with single-backbone controls
+bash scripts/run_all.sh tuev 100 124    # TUEV batch 2
+bash scripts/run_all.sh tusz 42 66      # TUSZ batch 1
+bash scripts/run_all.sh tusz 100 124    # TUSZ batch 2
+```
+
+`run_all.sh` calls the individual scripts in `scripts/`, which can also be run alone. A run whose output file already exists is skipped, so an interrupted queue can be restarted. All settings are passed on the command line from `scripts/flags.sh`. pG and pLS differ only in `--lsadlc adlc` and the gate file.
+
+### Stage C: evaluation
+
+```bash
+python src/baseline_single_backbone.py    # Table 4
+python src/ensemble_eval.py               # Tables 5, 6, 8
+python src/ensemble_per_class.py          # Table 7
+python src/ensemble_precision_recall.py   # Section 3.4
+```
+
+These scripts read only the evaluation probabilities, the JSON outputs and the evaluation labels. Set `LSADLC_ROOT` to read a different results tree.
+
+## Output
+
+| File | Contents |
 |---|---|
-| **pG** | three-group ensemble, no LS-ADLC (control) |
-| **pLS** | the same ensemble trained with LS-ADLC (proposed) |
+| `results*/<tag>_armA_seed<s>.json` | Effective configuration and metrics of one run |
+| `results*/<tag>_armA_seed<s>_evalprob.npy` | Evaluation probabilities of one run |
+| `data*/oof_pG_<group>.npz` | LS-ADLC gate of one anatomical group |
+| `checkpoints*/` | Selected checkpoint of each run |
+| `results/analysis/ensemble_eval_results.json` | Paired tests of both corpora and both batches |
+| `results/analysis/ensemble_per_class_results.json` | Per-class F1 |
+| `results/analysis/baseline_single_backbone_results.json` | Ensemble vs. single backbones |
 
-## Main results
+## Architecture
 
-Means of 25 seeds per batch, fused ensemble, evaluation pool of each corpus.
-Values are in %. Δ is pLS − pG, with Benjamini–Hochberg q (paired t-test,
-m = 4 metrics per batch).
+```
+Input EEG (22 bipolar channels, 5 s @ 250 Hz = 1250 samples)
+        │
+        ▼
+Channel grouping (3 anatomical groups)
+ ├── Temporal      (8 channels)
+ ├── Central       (6 channels)
+ └── Parasagittal  (8 channels)
+        │  (per group)
+        ▼
+CNN → ResBiLSTM → Attention + DWT features
+        │  (training only, per group)
+        ▼
+LS-ADLC: out-of-fold k-NN gate → Gaussian-perturbed latent copies
+        │
+        ▼
+Product-rule fusion (mean log-probability, then argmax)
+        │
+        ▼
+Event class
+```
+
+| Group | Channels | Indices |
+|---|---|---|
+| Temporal | FP1-F7, F7-T3, T3-T5, T5-O1, FP2-F8, F8-T4, T4-T6, T6-O2 | 0–7 |
+| Central | A1-T3, T3-C3, C3-CZ, CZ-C4, C4-T4, T4-A2 | 8–13 |
+| Parasagittal | FP1-F3, F3-C3, C3-P3, P3-O1, FP2-F4, F4-C4, C4-P4, P4-O2 | 14–21 |
+
+## Methods
+
+| Component | Description |
+|---|---|
+| pLS (proposed) | Three-group ensemble trained with LS-ADLC |
+| pG | The same ensemble without LS-ADLC (control) |
+| pE1 | Single full-montage backbone, 1,866,822 parameters |
+| pE1wide | Capacity-matched single backbone, 5,473,414 parameters |
+
+| Setting | Value |
+|---|---|
+| Input | 5-s windows at 250 Hz, notch 60/120 Hz, band-pass 0.5–80 Hz, DWT (db4, level 6) features |
+| Optimizer | AdamW, lr 1e-3, weight decay 1e-4, 2 warm-up epochs then cosine decay, batch 256, ≤ 40 epochs |
+| Checkpoint selection | Best internal-validation Cohen's kappa, patience 10 |
+| Regularization | Dropout 0.1 / 0.3 (head), channel dropout p = 0.3 over 12 channels, gradient clipping 1.0 |
+| LS-ADLC gate | Out-of-fold k-NN vote, k = 15, distance-weighted, 5 subject-grouped folds, 15 epochs per fold, τ = 0.80, majority class excluded |
+| LS-ADLC synthesis | z + α σ_c ε with α = 0.5, copy ratio 0.45, 0.50 or 0.55 of 10 copies, i.e. 4 or 5 copies per flagged window (Eq. 5) |
+
+Both corpora use their official, disjoint train/eval pools. For checkpoint selection, the last 20% of the training subjects in alphabetical order are held out. The TUSZ dev pool is not used.
+
+## Results
+
+Means of 25 seeds per batch, fused ensemble, evaluation pool of each corpus. Values are in %. Δ is pLS − pG, with Benjamini–Hochberg q (paired t-test, m = 4 metrics per batch).
 
 | Corpus, batch | Metric | pG | pLS | Δ | q |
 |---|---|---:|---:|---:|---:|
@@ -39,159 +215,25 @@ m = 4 metrics per batch).
 | | Cohen's kappa | 44.51 | 50.40 | +5.90 | 3.2e-5 |
 | | Weighted-F1 | 85.11 | 86.45 | +1.34 | 3.8e-5 |
 
-Batch 1 (seeds 42–66) and the full statistics (mean ± SD of the paired
-differences, 95% CI, t, p) are in Tables 5, 6 and 8 of the paper. All of
-them are reproduced by `analysis/paired_ttest_table.py`.
-
-## Repository layout
-
-```
-configs/      config.yaml (TUEV), config_tusz.yaml (TUSZ), all hyperparameters
-data_prep/    raw EDF -> cached windows (HDF5) and DWT features (.npy)
-src/          model, training loop, LS-ADLC gate
-scripts/      run scripts of every training run reported in the paper
-analysis/     statistics of Tables 4-8 and Section 3.4
-figures/      Figs. 1-6 of the paper
-```
-
-| File | Role | Paper |
-|---|---|---|
-| `src/model.py` | CNN-ResBiLSTM-Attention backbone, channel-subset wrapper | Sect. 2.3, Fig. 3 |
-| `src/oof_encoder.py` | out-of-fold latent k-NN confidence gate (Stage A) | Algorithm 1, Eqs. 2–3 |
-| `src/train.py` | training of one group backbone, with or without LS-ADLC (Stage B), checkpoint selection, evaluation | Algorithm 2, Eqs. 4–5 |
-| `analysis/*.py` | product-rule fusion of the three groups, metrics and statistics | Algorithm S1 (Supplementary Material), Eq. 1, Sect. 2.8 |
-| `src/common.py`, `src/features.py` | configuration, montage, filtering, DWT features | Sect. 2.2 |
-| `src/latent_ops.py`, `src/lsadlc_v2.py` | alternative gates and latent operators imported by `train.py`, not used by the paper's configuration | |
-
-## Installation
-
-```bash
-git clone <repository-url> ls-adlc && cd ls-adlc
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-```
-
-Tested with Python 3.12, PyTorch 2.11 (CUDA 12.8) and one NVIDIA RTX 4080
-SUPER (16 GB). Training needs a CUDA GPU. All runs use deterministic mode
-(`runtime.deterministic=true`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`). Results
-are therefore bit-reproducible on the same hardware and software stack.
-Other GPUs or library versions may change the last digits.
-
-## Data
-
-Neither corpus can be redistributed. Both are available free of charge to
-registered users of the Neural Engineering Data Consortium (NEDC), Temple
-University (https://isip.piconepress.com):
-
-- **TUEV**, TUH EEG Events Corpus, v2.0.0: 6-class event classification
-  (SPSW, GPED, PLED, EYEM, ARTF, BCKG).
-- **TUSZ**, TUH EEG Seizure Corpus, v2.0.5: binary seizure detection.
-
-Both corpora use their official, disjoint train/eval pools. For
-checkpoint selection, the last 20% of the training subjects in alphabetical
-order are held out (`split.mode=alphabetical_tail`). The TUSZ dev pool is
-not used.
-
-## Reproduction
-
-Every command is run from the repository root. Each run script skips a run
-whose output file already exists, so an interrupted queue can be restarted.
-
-### 1. Build the caches (CPU, once)
-
-TUEV: `paths.dataset_root` in `configs/config.yaml` (default `../dataset`)
-must contain `edf/train/` and `edf/eval/` as distributed by NEDC. Otherwise,
-add `--set paths.dataset_root=/path/to/tuev` to the two `build_windows.py`
-calls.
-
-```bash
-python data_prep/build_windows.py    --split train          # data/win_train.h5
-python data_prep/build_windows.py    --split eval           # data/win_eval.h5
-python data_prep/precompute_feats.py --split train --arm A  # data/feat_train_A.npy
-python data_prep/precompute_feats.py --split eval  --arm A  # data/feat_eval_A.npy
-python data_prep/export_npy.py       --split train          # optional: data/X_train.npy (memory-mapped)
-```
-
-TUSZ (`--tusz-root` is the TUSZ `edf/` directory with `train/`, `dev/`, `eval/`):
-
-```bash
-C=configs/config_tusz.yaml
-for s in train eval; do
-  python data_prep/build_tusz.py           --config $C --tusz-root /path/to/tusz/v2.0.5/edf --split $s
-  python data_prep/finalize_tusz_cache.py  --config $C --split $s
-  python data_prep/precompute_feats_tusz.py --config $C --split $s
-  python data_prep/export_npy.py           --config $C --split $s   # optional
-done
-```
-
-### 2. Train (GPU)
-
-```bash
-bash scripts/run_all.sh tuev 42 66      # TUEV batch 1 (+ single-backbone controls pE1, pE1wide)
-bash scripts/run_all.sh tuev 100 124    # TUEV batch 2
-bash scripts/run_all.sh tusz 42 66      # TUSZ batch 1
-bash scripts/run_all.sh tusz 100 124    # TUSZ batch 2
-```
-
-`run_all.sh` calls the individual scripts, which can also be run alone:
-
-| Script | Runs |
-|---|---|
-| `run_oof_knn.sh <corpus>` | LS-ADLC gate for the three groups, `data*/oof_pG_<group>.npz` (once per corpus, independent of the seed) |
-| `run_pG.sh <corpus> <s1> <s2>` | control arm, 3 groups × seeds |
-| `run_pLS.sh <corpus> <s1> <s2>` | LS-ADLC arm, 3 groups × seeds |
-| `run_pE1_baseline.sh <s1> <s2>` | single full-montage backbone pE1, 1,866,822 parameters (TUEV, Table 4) |
-| `run_pE1wide.sh <s1> <s2>` | capacity-matched single backbone pE1wide, 5,473,414 parameters (TUEV, Table 4) |
-
-All settings are passed explicitly on the command line from
-`scripts/flags.sh`. pG and pLS differ only in `--lsadlc adlc` and the gate
-file. Each run writes `results*/<tag>_armA_seed<s>.json`, which holds the
-full effective configuration and metrics, together with the evaluation
-probabilities `*_evalprob.npy`, and saves the selected checkpoint in
-`checkpoints*/`. One run of the paper uses the following settings
-(Table 2):
-
-| Setting | Value |
-|---|---|
-| Input | 5-s windows at 250 Hz, notch 60/120 Hz, band-pass 0.5–80 Hz, DWT (db4, level 6) features |
-| Optimizer | AdamW, lr 1e-3, weight decay 1e-4, 2 warm-up epochs then cosine decay, batch 256, ≤ 40 epochs |
-| Checkpoint selection | best internal-validation Cohen's kappa, patience 10 |
-| Regularization | dropout 0.1 / 0.3 (head), channel dropout p = 0.3 over 12 channels, gradient clipping 1.0 |
-| LS-ADLC gate | out-of-fold k-NN vote, k = 15, distance-weighted, 5 subject-grouped folds, 15 epochs per fold, τ = 0.80, majority class excluded |
-| LS-ADLC synthesis | z + α σ_c ε with α = 0.5, copy ratio 0.45, 0.50 or 0.55 of 10 copies, i.e. 4 or 5 copies per flagged window (Eq. 5) |
-
-### 3. Statistics and figures
-
-```bash
-python analysis/capacity_matched_single.py   # Table 4: pG vs. pE1 and pE1wide
-python analysis/paired_ttest_table.py        # Tables 5, 6, 8: pLS vs. pG, TUEV and TUSZ, both batches
-python analysis/per_class_f1.py              # Table 7: per-class F1, TUEV batch 2
-python analysis/precision_recall.py          # Section 3.4: precision and recall
-python figures/make_figures.py               # Figs. 1-6 -> figures/output/
-```
-
-The analysis scripts read only the `*_evalprob.npy`/JSON outputs and the
-evaluation labels. Their results are written to `analysis/output/`.
-`paired_ttest_table.py` asserts that every value agrees with the paper. The
-scripts locate the repository root automatically. Set `LSADLC_ROOT` to point
-them at a different results tree. `fig1_examples.py` also reads the raw TUEV
-EDF files.
-
-## Anatomical partition
-
-Channel indices refer to the 22-channel TCP montage in `configs/config.yaml`
-(`channels.montage`).
-
-| Group | Channels | Indices |
-|---|---|---|
-| Temporal | FP1-F7, F7-T3, T3-T5, T5-O1, FP2-F8, F8-T4, T4-T6, T6-O2 | 0–7 |
-| Central | A1-T3, T3-C3, C3-CZ, CZ-C4, C4-T4, T4-A2 | 8–13 |
-| Parasagittal | FP1-F3, F3-C3, C3-P3, P3-O1, FP2-F4, F4-C4, C4-P4, P4-O2 | 14–21 |
+Batch 1 (seeds 42–66) and the full statistics are in Tables 5, 6 and 8 of the paper.
 
 ## Citation
 
-The citation of the paper will be added upon publication. Please also cite
-the corpora and the original ADLC method:
+If you use this code, please cite:
+
+```bibtex
+@article{basri2026lsadlc,
+  title   = {Anatomically Partitioned Latent-Space Augmentation of Low-Confidence Samples
+             for Rare Epileptiform Event Classification in Multichannel {EEG}},
+  author  = {Basri, Muhammad Hasan and Sunaryono, Dwi and
+             Purwananto, Yudhi and Sarno, Riyanarto},
+  journal = {Intelligent Medicine},
+  year    = {2026},
+  note    = {Under review}
+}
+```
+
+Please also cite the corpora and the original ADLC method:
 
 ```bibtex
 @article{obeid2016,
@@ -225,4 +267,9 @@ the corpora and the original ADLC method:
 
 ## License
 
-MIT, see `LICENSE`.
+Released under the MIT License.
+
+## Contact
+
+Dwi Sunaryono (corresponding author), dwi@its.ac.id
+Department of Informatics, Institut Teknologi Sepuluh Nopember (ITS), Surabaya, Indonesia

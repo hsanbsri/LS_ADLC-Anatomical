@@ -20,14 +20,14 @@ NON-annotated part of each recording, at a safe distance (GUARD) from any
 seizure on the same channel.
 
 Usage (paths relative to the repository root):
-  python data_prep/build_tusz.py --config configs/config_tusz.yaml \
+  python src/build_tusz.py --config configs/config_tusz.yaml \
       --tusz-root /path/to/TUSZ/v2.0.5/edf --split train
 Writes <cache_dir>/win_<split>.h5 (cache_dir = data_tusz in config_tusz.yaml).
 """
 import argparse, glob, os, sys, time
 import h5py, numpy as np, mne, warnings
 warnings.filterwarnings("ignore"); mne.set_log_level("ERROR")
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import load_config, build_montage, build_filters, apply_filters, montage_pairs
 
 WIN = 5.0                      # seconds, as for TUEV

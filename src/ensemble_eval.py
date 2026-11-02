@@ -1,4 +1,4 @@
-"""paired_ttest_table.py: pLS vs. pG on the fused ensemble (Tables 5, 6 and 8, Fig. 5).
+"""ensemble_eval.py: pLS vs. pG on the fused ensemble (Tables 5, 6 and 8).
 
 For TUEV batch 1 (seeds 42-66), TUEV batch 2 (seeds 100-124) and the same two
 batches on TUSZ, the script fuses the three anatomical-group models of each
@@ -12,8 +12,8 @@ that every value agrees with the numbers printed in the paper.
 
 Input:  results/*_evalprob.npy, results_tusz/*_evalprob.npy,
         data/win_eval.h5, data_tusz/win_eval.h5
-Output: analysis/output/paired_ttest_table_results.json
-Usage:  python analysis/paired_ttest_table.py
+Output: results/analysis/ensemble_eval_results.json
+Usage:  python src/ensemble_eval.py
 """
 import json
 import os
@@ -23,7 +23,7 @@ from scipy import stats
 from sklearn.metrics import balanced_accuracy_score, cohen_kappa_score, f1_score
 
 R = os.environ.get("LSADLC_ROOT", os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "analysis")
 os.makedirs(OUT, exist_ok=True)
 G = ["temporal", "central", "parasagittal"]
 SETS = {"TUEV": ("results", "data", 0, "SPSW-F1"), "TUSZ": ("results_tusz", "data_tusz", 1, "Seizure-F1")}
@@ -99,7 +99,7 @@ def check(out):
 if __name__ == "__main__":
     out = run()
     check(out)
-    json.dump(out, open(os.path.join(OUT, "paired_ttest_table_results.json"), "w"), indent=1)
+    json.dump(out, open(os.path.join(OUT, "ensemble_eval_results.json"), "w"), indent=1)
     for c, rows in out.items():
         print(f"\n{c}")
         for k, r in rows.items():

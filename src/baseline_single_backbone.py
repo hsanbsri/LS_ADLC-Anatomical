@@ -1,4 +1,4 @@
-"""capacity_matched_single.py: three-group ensemble vs. single full-montage backbones (Table 4).
+"""baseline_single_backbone.py: three-group ensemble vs. single full-montage backbones (Table 4).
 
 TUEV, seeds 42-66. Contrasts, each with a paired t-test over seeds,
 Benjamini-Hochberg correction (m = 4 metrics) and the 95% CI of the mean
@@ -11,8 +11,8 @@ pG is fused by Eq. 1.
 
 Input:  results/pG_*_evalprob.npy, results/pE1_strict_*_evalprob.npy,
         results/pE1wide_*_evalprob.npy, data/win_eval.h5
-Output: analysis/output/capacity_matched_single_results.json
-Usage:  python analysis/capacity_matched_single.py
+Output: results/analysis/baseline_single_backbone_results.json
+Usage:  python src/baseline_single_backbone.py
 """
 import numpy as np
 import h5py
@@ -21,7 +21,7 @@ from sklearn.metrics import balanced_accuracy_score, cohen_kappa_score, f1_score
 import json, os
 
 R = os.environ.get("LSADLC_ROOT", os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "analysis")
 os.makedirs(OUT, exist_ok=True)
 G = ["temporal", "central", "parasagittal"]; SEEDS = range(42, 67); KEYS = ["balAcc", "kappa", "wF1", "SPSW"]
 y = h5py.File(f"{R}/data/win_eval.h5", "r")["y"][:].astype(int)
@@ -47,4 +47,4 @@ for name, A, B in (("pG - pE1wide", pG, pW), ("pE1wide - pE1", pW, pE1), ("pG - 
         res[k] = dict(a=float(A[:, i].mean()), b=float(B[:, i].mean()), delta=float(D[:, i].mean()),
                       ci=[float(D[:, i].mean() - h), float(D[:, i].mean() + h)], p=float(p[i]), q=float(q[i]), fav=int((D[:, i] > 0).sum()))
     out[name] = res
-json.dump(out, open(os.path.join(OUT, "capacity_matched_single_results.json"), "w"), indent=1)
+json.dump(out, open(os.path.join(OUT, "baseline_single_backbone_results.json"), "w"), indent=1)

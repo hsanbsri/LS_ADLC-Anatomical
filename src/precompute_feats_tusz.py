@@ -7,12 +7,12 @@ The float16 cache is cast to float32 before normalization.
 Only the 21 DWT dimensions (7 subbands x 3 statistics) are computed; the
 periodicity and laterality features are disabled in the paper for both corpora.
 
-Usage: python data_prep/precompute_feats_tusz.py --config configs/config_tusz.yaml --split train
+Usage: python src/precompute_feats_tusz.py --config configs/config_tusz.yaml --split train
 Reads <cache_dir>/win_<split>.h5, writes <cache_dir>/feat_<split>_A.npy.
 """
 import argparse, os, sys, time
 import h5py, numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import load_config
 from features import normalize, dwt_features
 

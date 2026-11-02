@@ -63,7 +63,7 @@ channels:
   aliases: {T7: "T3", T8: "T4", P7: "T5", P8: "T6"}
 
 labels:
-  # [TUSZ] 0 = background, 1 = seizure (labels written by data_prep/build_tusz.py)
+  # [TUSZ] 0 = background, 1 = seizure (labels written by src/build_tusz.py)
   code_to_class: {0: 0, 1: 1}
   class_names: ["bckg", "seizure"]
 

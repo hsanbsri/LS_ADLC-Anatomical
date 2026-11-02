@@ -25,7 +25,7 @@ import h5py
 import numpy as np
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (load_config, sig_len, build_montage, build_filters,  # noqa: E402
                     apply_filters, recording_stats)
 

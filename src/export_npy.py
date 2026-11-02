@@ -7,7 +7,7 @@ loading the whole array into memory (about 9 GB for TUEV train, 20 GB for TUSZ
 train). The .npy file is an exact copy of the HDF5 dataset (same dtype), so
 results are identical with or without it.
 
-Usage: python data_prep/export_npy.py [--config configs/config_tusz.yaml] --split train
+Usage: python src/export_npy.py [--config configs/config_tusz.yaml] --split train
 """
 import argparse
 import os
@@ -16,7 +16,7 @@ import sys
 import h5py
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import load_config  # noqa: E402
 
 ap = argparse.ArgumentParser()
